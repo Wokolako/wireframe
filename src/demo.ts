@@ -1,6 +1,11 @@
 import type {Farmer,Listing,Order,User} from './api';
+import {adminEmail,clerkPublishableKey} from './auth-config';
 // Presentation-only persistence. No credentials, API requests or real transactions.
 const key='wirefen-presentation-v1';
+type Identity={id:string;name:string;email:string;verifiedEmails:string[]};
+let identity:Identity|null=null;
+export function setDemoIdentity(value:Identity|null){identity=value;}
+const isAdmin=()=>!!identity?.verifiedEmails.some(email=>email.toLowerCase()===adminEmail);
 type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buyer_id:string})[];baselines:Record<string,Record<string,unknown>>;drafts:Record<string,Record<string,unknown>>;session:string|null;pwa:Record<string,string>};
 const now=()=>new Date().toISOString();
 const day=(n=0)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
@@ -23,23 +28,38 @@ function load():State{try{const saved=localStorage.getItem(key);if(saved)return 
 export async function demoApi(path:string,options:RequestInit={}):Promise<unknown>{
  const data=load(),url=new URL(path,'https://presentation.invalid'),route=url.pathname,q=url.searchParams,method=options.method||'GET';
  const body:Record<string,unknown>=options.body?JSON.parse(String(options.body)):{};
- const user=data.users.find(u=>u.id===data.session)||null;
+ let user=identity?data.users.find(u=>u.id===identity!.id)||null:null;
+ // Demo roles derive from the signed-in identity, never the old sample-role switch.
+ if(identity&&isAdmin()){
+  if(!user){user={id:identity.id,name:identity.name||'George Chivalo',email:identity.email,phone:'Not provided',role:'Admin',sms_opt_in:false,farmer:null};data.users.push(user);}
+  user.role='Admin';user.farmer=null;
+ }else if(user?.role==='Admin'){user.role='Buyer';user.farmer=null;}
  const finish=(value:unknown)=>{memory=data;try{localStorage.setItem(key,JSON.stringify(data));}catch{}return structuredClone(value);};
- const account=(roles:string[])=>{if(!user||!roles.includes(user.role))throw new Error('Choose the appropriate sample account to continue.');return user;};
- if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'local'};
+ const account=(roles:string[])=>{if(!user||!roles.includes(user.role))throw new Error('Sign in with an authorized account to continue.');return user;};
+ if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey};
  if(route==='/auth/me')return finish(user);
- if(route==='/auth/demo'){data.session=data.users.find(u=>u.role===body.role)?.id||null;return finish(data.users.find(u=>u.id===data.session)||null);}
+ if(route==='/auth/onboard'){
+  if(!identity)throw new Error('Sign in with Clerk to create your profile.');if(user)return finish(user);
+  if(!['Buyer','Farmer'].includes(String(body.role)))throw new Error('Choose Buyer or Farmer.');
+  const name=String(body.name||'').trim(),phone=String(body.phone||'').trim(),role=body.role as 'Buyer'|'Farmer';
+  if(name.length<2||!/^\+[1-9]\d{7,14}$/.test(phone))throw new Error('Enter your name and a phone number with its country code.');
+  if(data.users.some(u=>u.phone===phone))throw new Error('This phone number is already used by another profile on this device.');
+  let farmer:Farmer|null=null;
+  if(role==='Farmer'){if(!String(body.farm_name||'').trim()||!String(body.location||'').trim())throw new Error('Enter your farm name and location.');farmer={id:'farm-'+identity.id,user_id:identity.id,name,phone,farm_name:String(body.farm_name),location:String(body.location),farm_size:0,verification_status:'Unverified'};data.farmers.push(farmer);}
+  user={id:identity.id,name,email:identity.email,phone,role,sms_opt_in:!!body.sms_opt_in,farmer};data.users.push(user);return finish(user);
+ }
+ if(route==='/auth/demo')throw new Error('Sample account switching is disabled. Sign in with your Clerk account.');
  if(route==='/auth/logout'){data.session=null;return finish({ok:true});}
- if(route.startsWith('/auth/'))throw new Error('Choose Buyer, Farmer or Admin to explore the presentation.');
+ if(route.startsWith('/auth/'))throw new Error('Use Clerk to sign in or create your account.');
  if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,ZAR:20},dates:{EUR:day(),USD:day(),ZAR:day()},fetched_at:now(),source:'Illustrative presentation rates',stale:false,demo:true};
  if(route==='/pwa/session'||route==='/pwa/events'){if(method==='POST'&&['prompted','dismissed','installed'].includes(String(body.event)))data.pwa[String(body.event)+'_at']??=now();return finish({...data.pwa,suppress_prompt:!!(data.pwa.prompted_at||data.pwa.dismissed_at||data.pwa.installed_at),device_installed:!!data.pwa.installed_at});}
  if(route==='/account/consent'){account(['Farmer','Buyer','Admin']).sms_opt_in=!!body.sms_opt_in;return finish({ok:true});}
  if(route==='/farmers'){account(['Admin']);return finish(data.farmers.map(f=>({...f,baseline_status:data.baselines[f.id]?.status})));}
  const farmRoute=route.match(/^\/farmers\/([^/]+)\/(baseline|listing-draft)$/);
- if(farmRoute){const u=account(['Farmer','Admin']),[,id,kind]=farmRoute,farm=data.farmers.find(f=>f.id===id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose your sample farm.');const table=kind==='baseline'?data.baselines:data.drafts;if(method!=='GET')table[id]={...table[id],...body,updated_at:now()};return finish(table[id]||(kind==='baseline'?{status:'draft'}:{}));}
+ if(farmRoute){const u=account(['Farmer','Admin']),[,id,kind]=farmRoute,farm=data.farmers.find(f=>f.id===id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');const table=kind==='baseline'?data.baselines:data.drafts;if(method!=='GET')table[id]={...table[id],...body,updated_at:now()};return finish(table[id]||(kind==='baseline'?{status:'draft'}:{}));}
  if(route==='/listings'&&method==='GET')return finish(data.listings.filter(l=>(!q.has('mine')||l.farmer_id===user?.farmer?.id)&&(!q.get('category')||l.crop_category===q.get('category'))&&(!q.get('search')||`${l.title} ${l.farm_name} ${l.location}`.toLowerCase().includes(q.get('search')!.toLowerCase()))&&(!q.get('min_volume')||l.available_volume>=Number(q.get('min_volume')))&&(!q.get('max_volume')||l.available_volume<=Number(q.get('max_volume')))&&(!q.get('harvest_date_after')||l.harvest_date>q.get('harvest_date_after')!)&&(!q.has('preservative')||!!l.preservative_used===(q.get('preservative')==='true'))));
  if(route==='/listings'&&method==='POST'){
-  const u=account(['Farmer','Admin']),farm=data.farmers.find(f=>f.id===body.farmer_id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose your sample farm.');
+  const u=account(['Farmer','Admin']),farm=data.farmers.find(f=>f.id===body.farmer_id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');
   const id=crypto.randomUUID(),crop_category=String(body.crop_category),image=({Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'} as Record<string,string>)[crop_category]||'tomatoes';
   data.listings.unshift({id,farmer_id:farm.id,title:String(body.title),crop_category,available_volume:Number(body.available_volume),price:Number(body.price),harvest_date:String(body.harvest_date),expiration_date:String(body.expiration_date),shelf_life_days:Number(body.shelf_life_days),preservative_used:body.preservative_used?1:0,description:String(body.description||''),image:`/images/${image}.jpg`,farm_name:farm.farm_name,location:farm.location,verification_status:farm.verification_status});delete data.drafts[farm.id];return finish({id});
  }

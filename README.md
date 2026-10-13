@@ -6,7 +6,7 @@ Phase 1 agricultural marketplace: React/TypeScript client, independently served 
 
 ## Presentation version (current default)
 
-The frontend uses dummy data entirely inside the browser. It makes **no API, Clerk, SMS or exchange-provider requests**. The Node backend remains in `server/` for later activation. All screens display sample data; EUR/USD rates are explicitly illustrative.
+Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and EUR/USD example rates remain browser-local dummy data. The frontend does not call the Wirefen Node API, SMS gateway or currency provider. The Node backend remains in `server/` for later activation.
 
 ```powershell
 npm.cmd install
@@ -20,11 +20,11 @@ npm.cmd run build
 npm.cmd start
 ```
 
-Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Choose **Sign in ? Buyer / Farmer / Admin** to present each workspace. Requests, consent preferences, farmer drafts and new listings persist only in browser storage. No real accounts or orders are created. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
+Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
 
 ## Connect the existing backend later
 
-Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. Never rely on presentation accounts for live authentication.
+Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. The admin designation currently controls the dummy-data workspace only. When enabling the Node API, provision/link the admin with the documented server-side admin scripts; the API continues to enforce its database roles.
 
 The launch market is still a configurable sample (South Africa/ZAR). Do not treat presentation exchange rates or records as live data.
 
@@ -41,7 +41,7 @@ The launch market is still a configurable sample (South Africa/ZAR). Do not trea
 
 ## Configuration and production
 
-The ignored local `.env` contains your supplied Clerk development keys. Never commit it. For another environment, copy `.env.example` and provide that environment?s credentials. The secret stays on the API server; `/api/v1/config` exposes only the publishable key. This React/Vite app loads that public key at runtime, so it is not tied to a Next.js build variable.
+The ignored local `.env` contains your supplied Clerk development keys. Never commit it. For another environment, copy `.env.example` and provide that environment?s credentials. The secret stays on the API server; `/api/v1/config` exposes only the publishable key. In backend mode the React/Vite app loads the public key at runtime. Static presentation mode uses VITE_CLERK_PUBLISHABLE_KEY or the public development fallback in src/auth-config.ts.
 
 | Variable | Purpose |
 | --- | --- |
@@ -159,4 +159,6 @@ A Dockerfile and PostgreSQL Compose service are included. Set production Clerk k
 
 GitHub Actions runs dependency installation, all backend tests, and the production build. Run `node tests/pwa-ui.mjs` for first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation checks. Run `npm.cmd run test:ui` for the full marketplace flow.
 
-Presentation validation: `npm.cmd run test:presentation` launches a static-only server, blocks all `/api/` requests and verifies there are no backend or external requests while exercising the catalogue, converter, Buyer, Farmer, Admin, local persistence and phone layout. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require a frontend built with `VITE_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
+Presentation validation: `npm.cmd run test:presentation` launches a static-only server, blocks Wirefen `/api/` requests, and checks the dummy catalogue/converter, live Clerk dialogs and phone layout. `node --env-file=.env tests/clerk-registration-ui.mjs` creates a temporary Clerk development test account through the real registration form, verifies email, completes onboarding, signs out/in, and deletes that test account. No real emails are sent. Unit tests check the verified-email admin rule and local profile isolation. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require a frontend built with `VITE_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
+
+Clerk configuration: `src/auth-config.ts` contains only the public development instance identifier as a fallback for static deployments; `VITE_CLERK_PUBLISHABLE_KEY` overrides it. The secret is never bundled. Development-instance restrictions still apply; use production Clerk keys and configured domains when going live. Marketplace demo data remains separate from Clerk accounts.

@@ -2,21 +2,30 @@ import {useEffect,useState,type FormEvent} from 'react';
 import {ClerkProvider,useAuth,useClerk,useUser} from '@clerk/react';
 import {ArrowRight,ShieldCheck,Sprout,Tractor,ShoppingBasket} from 'lucide-react';
 import {App} from './App';
-import {api,readLocal,writeLocal,setTokenGetter,send,type Config,type User} from './api';
+import {setDemoIdentity} from './demo';
+import {PRESENTATION_MODE,api,readLocal,writeLocal,setTokenGetter,send,type Config,type User} from './api';
 
 export type AuthBridge={ready:boolean;signedIn:boolean;sessionId:string|null|undefined;name:string;signIn:()=>void;signUp:()=>void;signOut:()=>Promise<void>;manage:()=>void};
 function ClerkApp(){
- const {isLoaded,isSignedIn,sessionId,getToken}=useAuth();const clerk=useClerk();const {user}=useUser();
+ const {isLoaded,isSignedIn,sessionId,getToken}=useAuth();const clerk=useClerk();const {user,isLoaded:userLoaded}=useUser();
+ if(PRESENTATION_MODE)setDemoIdentity(isSignedIn&&user?{id:user.id,name:user.fullName||'',email:user.primaryEmailAddress?.emailAddress||'',verifiedEmails:user.emailAddresses.filter(e=>e.verification.status==='verified').map(e=>e.emailAddress)}:null);
  // Set before children's effects issue API requests. Tokens stay in memory only.
  setTokenGetter(()=>getToken());
- return <App identity={{ready:isLoaded,signedIn:!!isSignedIn,sessionId,name:user?.fullName||'',signIn:()=>clerk.openSignIn(),signUp:()=>clerk.openSignUp(),signOut:async()=>{await clerk.signOut();},manage:()=>clerk.openUserProfile()}}/>;
+ return <App identity={{ready:isLoaded&&userLoaded,signedIn:!!isSignedIn,sessionId:sessionId?sessionId+':'+(user?.updatedAt?.getTime()||0):sessionId,name:user?.fullName||'',signIn:()=>clerk.openSignIn(),signUp:()=>clerk.openSignUp(),signOut:async()=>{await clerk.signOut();},manage:()=>clerk.openUserProfile()}}/>;
+}
+function navigateAuth(to:string,replace=false){
+ const url=new URL(to,location.href);
+ if(url.origin!==location.origin||url.pathname!==location.pathname){if(replace)location.replace(url.href);else location.assign(url.href);return;}
+ // Keep Clerk's completed session mounted when navigating this hash-based SPA.
+ if(replace)history.replaceState(null,'',url);else history.pushState(null,'',url);
+ window.dispatchEvent(new HashChangeEvent('hashchange'));
 }
 export function AuthRoot(){
  const [config,setConfig]=useState<Config|null>(null),[error,setError]=useState('');
  useEffect(()=>{api<Config>('/config').then(c=>{writeLocal('wirefen-config',c);setConfig(c);}).catch(()=>{const saved=readLocal<Config|null>('wirefen-config',null);if(saved&&!navigator.onLine)setConfig(saved);else setError('We could not connect to Wirefen. Check your connection and try again.');});},[]);
  if(error)return <div className="startup-state"><Sprout size={36}/><h1>Let’s reconnect.</h1><p role="alert">{error}</p><button className="primary" onClick={()=>location.reload()}>Try again</button></div>;
  if(!config)return <div className="startup-state" role="status"><Sprout size={36}/><p>Opening your growing network…</p></div>;
- if(config.auth_provider==='clerk'&&config.clerk_publishable_key&&navigator.onLine)return <ClerkProvider publishableKey={config.clerk_publishable_key} localization={{signIn:{start:{title:'Sign in to Wirefen'}},signUp:{start:{title:'Create your Wirefen account'}}}} appearance={{variables:{colorPrimary:'#234c36',colorForeground:'#203a2b',fontFamily:'DM Sans, sans-serif',borderRadius:'0.8rem'},elements:{cardBox:{boxShadow:'0 24px 80px #173c2826'},formButtonPrimary:{minHeight:'44px'}}}}><ClerkApp/></ClerkProvider>;
+ if(config.auth_provider==='clerk'&&config.clerk_publishable_key&&navigator.onLine)return <ClerkProvider publishableKey={config.clerk_publishable_key} routerPush={url=>navigateAuth(url)} routerReplace={url=>navigateAuth(url,true)} signInFallbackRedirectUrl="/#/marketplace" signUpFallbackRedirectUrl="/#/marketplace" localization={{signIn:{start:{title:'Sign in to Wirefen'}},signUp:{start:{title:'Create your Wirefen account'}}}} appearance={{variables:{colorPrimary:'#234c36',colorForeground:'#203a2b',fontFamily:'DM Sans, sans-serif',borderRadius:'0.8rem'},elements:{cardBox:{boxShadow:'0 24px 80px #173c2826'},formButtonPrimary:{minHeight:'44px'}}}}><ClerkApp/></ClerkProvider>;
  return <App offlineClerk={config.auth_provider==='clerk'}/>;
 }
 export function Onboarding({name,onComplete}:{name:string;onComplete:(user:User)=>void}){

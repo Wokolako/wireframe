@@ -33,6 +33,7 @@
     "zod": "^4.1.0"
   },
   "devDependencies": {
+    "@clerk/testing": "^2.2.45",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^4.7.0",
