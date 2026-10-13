@@ -1,0 +1,8 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createExchangeService} from '../server/exchange.mjs';
+const start=Date.parse('2026-10-13T12:00:00Z');
+const rows=[{base:'EUR',quote:'USD',rate:1.16,date:'2026-10-13'},{base:'EUR',quote:'ZAR',rate:20,date:'2026-10-13'}];
+test('exchange rates validate and cache a single coalesced provider request',async()=>{let calls=0;const get=createExchangeService({clock:()=>start,fetcher:async()=>{calls++;return {ok:true,json:async()=>rows};}});const [a,b]=await Promise.all([get('ZAR'),get('ZAR')]);assert.equal(a.rates.EUR,1);assert.equal(a.rates.USD,1.16);assert.deepEqual(a,b);await get('ZAR');assert.equal(calls,1);assert.equal(100/a.rates.ZAR*a.rates.USD,5.8);});
+test('failed refresh returns labeled cached rates then expires them',async()=>{let time=start,fail=false;const get=createExchangeService({clock:()=>time,fetcher:async()=>{if(fail)throw Error();return{ok:true,json:async()=>rows};}});await get('ZAR');fail=true;time+=3600001;assert.equal((await get('ZAR')).stale,true);time+=8*86400000;await assert.rejects(get('ZAR'),e=>e.status===503);});
+test('missing, nonpositive, and old rates never produce conversions',async()=>{for(const data of [[],[{...rows[0],rate:0},rows[1]],[{...rows[0],date:'2026-01-01'},rows[1]]]){const get=createExchangeService({clock:()=>start,fetcher:async()=>({ok:true,json:async()=>data})});await assert.rejects(get('ZAR'),e=>e.status===503);}const get=createExchangeService();await assert.rejects(get('../../'),/Invalid market/);});
