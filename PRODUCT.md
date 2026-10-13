@@ -31,3 +31,6 @@ South Africa and ZAR are provisional sample-market choices. Production database 
 
 ## Accessibility & Inclusion
 Responsive mobile-first web interface, keyboard access, visible focus, labeled forms, high contrast, reduced motion, and recoverable errors.
+
+## Current delivery mode
+Presentation mode is now the default at the user?s request. The client uses browser-local dummy data and sample Buyer/Farmer/Admin sessions; it does not contact Clerk or the API. Node backend implementation is retained for later. Enable VITE_USE_BACKEND=true only when reconnecting deliberately.

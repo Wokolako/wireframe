@@ -4,28 +4,29 @@ Wirefen agricultural marketplace and lifecycle platform.
 
 Phase 1 agricultural marketplace: React/TypeScript client, independently served Express REST API, PostgreSQL support, and a zero-configuration SQLite development database.
 
-## Run locally
+## Presentation version (current default)
 
-Requires Node.js 22.19 or later. In PowerShell:
+The frontend uses dummy data entirely inside the browser. It makes **no API, Clerk, SMS or exchange-provider requests**. The Node backend remains in `server/` for later activation. All screens display sample data; EUR/USD rates are explicitly illustrative.
 
 ```powershell
-cd C:\Users\Admin\Desktop\woko\fivemilli
 npm.cmd install
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173. Vite forwards `/api` to port 3001. For the built PWA:
+Open http://127.0.0.1:5173. For the installable presentation build:
 
 ```powershell
 npm.cmd run build
 npm.cmd start
 ```
 
-Open http://127.0.0.1:3001. Stop an existing server before starting another on that port. Service workers are enabled in the built app, not the Vite development app.
+Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Choose **Sign in ? Buyer / Farmer / Admin** to present each workspace. Requests, consent preferences, farmer drafts and new listings persist only in browser storage. No real accounts or orders are created. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
 
-Choose **Sign in → Buyer / Farmer / Admin** to explore the explicitly labeled sample workspace. These shortcuts only exist outside production and can also be disabled with `SEED_DEMO=false`. Sample users have random passwords. Public registration only permits Buyer or Farmer accounts.
+## Connect the existing backend later
 
-The launch market has not been selected. South Africa/ZAR is illustrative. Configure `MARKET_NAME` and `CURRENCY` before adding launch data. Listing prices and baseline costs use one configured marketplace currency; changing currency does not convert existing amounts.
+Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. Never rely on presentation accounts for live authentication.
+
+The launch market is still a configurable sample (South Africa/ZAR). Do not treat presentation exchange rates or records as live data.
 
 ## Features
 
@@ -157,3 +158,5 @@ The Node 22 / Express 5 API serves the entire Phase 1 app: Clerk/local authentic
 A Dockerfile and PostgreSQL Compose service are included. Set production Clerk keys, an exact HTTPS `APP_ORIGIN`, and a long URL-safe `POSTGRES_PASSWORD`, then use `docker compose up --build -d`. Terminate HTTPS at your reverse proxy; the app port is bound to host loopback. `TRUST_PROXY_HOPS=1` assumes exactly one trusted proxy; adjust to your real deployment. Runtime credentials are injected into the container and excluded from the image build. Configure Twilio credentials before sending SMS. Back up the PostgreSQL volume and use a shared/edge rate limiter for multiple API instances. Container/PostgreSQL deployment configuration is provided but was not executed on this workstation.
 
 GitHub Actions runs dependency installation, all backend tests, and the production build. Run `node tests/pwa-ui.mjs` for first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation checks. Run `npm.cmd run test:ui` for the full marketplace flow.
+
+Presentation validation: `npm.cmd run test:presentation` launches a static-only server, blocks all `/api/` requests and verifies there are no backend or external requests while exercising the catalogue, converter, Buyer, Farmer, Admin, local persistence and phone layout. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require a frontend built with `VITE_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
