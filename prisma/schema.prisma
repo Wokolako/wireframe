@@ -1,0 +1,179 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                  String               @id @default(uuid())
+  name                String
+  phone               String               @unique
+  password_hash       String
+  role                String
+  sms_opt_in          Int                  @default(0)
+  sms_opt_in_at       String?
+  created_at          String
+  clerk_identity      ClerkIdentity?
+  pwa_account         PwaAccount?
+  farmer_profile      FarmerProfile?
+  order_requests      OrderRequest[]
+  sessions            Session[]
+  sms_consents        SmsConsent[]
+  conversational_state ConversationalState?
+
+  @@map("users")
+}
+
+model ClerkIdentity {
+  clerk_user_id String @id
+  user_id       String @unique
+  user          User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("clerk_identities")
+}
+
+model PwaVisitor {
+  id           String  @id
+  first_seen_at String
+  last_seen_at  String
+  prompted_at   String?
+  dismissed_at  String?
+  installed_at  String?
+
+  @@map("pwa_visitors")
+}
+
+model PwaAccount {
+  user_id      String  @id
+  prompted_at  String?
+  dismissed_at String?
+  installed_at String?
+  user         User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("pwa_accounts")
+}
+
+model FarmerProfile {
+  id                  String              @id @default(uuid())
+  user_id             String              @unique
+  farm_name           String
+  country             String              @default("")
+  region              String              @default("")
+  district            String?
+  locality            String              @default("")
+  ward                String?
+  location            String              @default("")
+  farm_size           Float               @default(0)
+  verification_status String              @default("Unverified")
+  user                User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  historical_baseline HistoricalBaseline?
+  listings            Listing[]
+  listing_draft       ListingDraft?
+
+  @@map("farmer_profiles")
+}
+
+model HistoricalBaseline {
+  farmer_id             String        @id
+  crop_type             String?
+  avg_land_size         Float?
+  avg_yield_per_acre    Float?
+  avg_duration_days     Int?
+  cost_fertilizer_seeds Float?
+  cost_labor            Float?
+  cost_processing       Float?
+  cost_transportation   Float?
+  avg_production_cost   Float?
+  status                String        @default("draft")
+  updated_at            String
+  farmer                FarmerProfile @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
+
+  @@map("historical_baselines")
+}
+
+model Listing {
+  id                String         @id @default(uuid())
+  farmer_id         String
+  title             String
+  crop_category     String
+  available_volume  Float
+  price             Float
+  harvest_date      String
+  expiration_date   String
+  shelf_life_days   Int
+  preservative_used Int            @default(0)
+  description       String         @default("")
+  image             String
+  status            String         @default("published")
+  created_at        String
+  farmer            FarmerProfile  @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
+  order_requests    OrderRequest[]
+
+  @@index([crop_category, harvest_date], map: "listings_category_idx")
+  @@map("listings")
+}
+
+model OrderRequest {
+  id                String  @id @default(uuid())
+  listing_id        String
+  buyer_id          String
+  volume            Float
+  delivery_location String
+  notes             String
+  status            String  @default("New")
+  created_at        String
+  listing           Listing @relation(fields: [listing_id], references: [id], onDelete: Cascade)
+  buyer             User    @relation(fields: [buyer_id], references: [id], onDelete: Cascade)
+
+  @@index([buyer_id], map: "orders_buyer_idx")
+  @@map("order_requests")
+}
+
+model Session {
+  token_hash String @id
+  user_id    String
+  expires_at String
+  user       User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model SmsConsent {
+  id          String @id @default(uuid())
+  user_id     String
+  opted_in    Int
+  recorded_at String
+  source      String
+  user        User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("sms_consents")
+}
+
+model ConversationalState {
+  user_phone          String  @id
+  current_form_id     String?
+  last_question_asked String?
+  timestamp           String
+  user                User    @relation(fields: [user_phone], references: [phone], onDelete: Cascade)
+
+  @@map("conversational_state")
+}
+
+model SmsMessage {
+  message_sid String @id
+  received_at String
+
+  @@map("sms_messages")
+}
+
+model ListingDraft {
+  farmer_id  String        @id
+  payload    String
+  updated_at String
+  farmer     FarmerProfile @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
+
+  @@map("listing_drafts")
+}

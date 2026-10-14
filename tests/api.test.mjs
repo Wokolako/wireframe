@@ -14,3 +14,38 @@ test('listings validate dates, volumes, and farm ownership',async()=>{const cook
 test('buyer inquiry is persisted and admin can progress its status',async()=>{const cookie=await demo('Buyer');const body={listing_id:'produce-1',volume:100,delivery_location:'Johannesburg',notes:'Collection preferred'};assert.equal((await call('/orders',{cookie,body:{...body,volume:100000}})).status,400);const create=await call('/orders',{cookie,body});assert.equal(create.status,201);assert.equal((await call('/orders/'+create.data.id,{cookie,method:'PATCH',body:{status:'Closed'}})).status,403);const admin=await demo('Admin');assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,200);assert.equal((await call('/orders',{cookie})).data[0].status,'Contacted');});
 test('cross-origin writes and revoked sessions are rejected',async()=>{const cookie=await demo('Buyer');assert.equal((await call('/account/consent',{cookie,method:'PATCH',body:{sms_opt_in:true},headers:{Origin:'https://attacker.example'}})).status,403);await call('/auth/logout',{cookie,body:{}});assert.equal((await call('/orders',{cookie})).status,401);});
 test('SMS rejects forged signatures, records STOP/START, routes yield, and deduplicates',async()=>{async function sms(body,signed=true){const params={From:'+27820000001',MessageSid:'SM'+Math.random(),...body};const signature=twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN,process.env.TWILIO_WEBHOOK_URL,params);const r=await fetch(base+'/webhooks/sms/receive',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signed?signature:'forged'},body:new URLSearchParams(params)});return{status:r.status,text:await r.text()};}assert.equal((await sms({Body:'START'},false)).status,403);assert.match((await sms({Body:'START'})).text,/enabled/);assert.match((await sms({Body:'BASELINE'})).text,/kilograms/);assert.match((await sms({Body:'invalid'})).text,/positive/);const sid='SM-dedup';assert.match((await sms({Body:'500',MessageSid:sid})).text,/saved/);assert.equal((await db.get('SELECT avg_yield_per_acre FROM historical_baselines WHERE farmer_id=?',['farm-1'])).avg_yield_per_acre,500);assert.doesNotMatch((await sms({Body:'500',MessageSid:sid})).text,/<Message>/);assert.match((await sms({Body:'STOP'})).text,/stopped/);assert.equal((await db.get('SELECT sms_opt_in FROM users WHERE id=?',['farmer-1'])).sms_opt_in,0);});
+test('Appendix B: Form 1 Guided Breakdown automatically aggregates costs via API and SMS',async()=>{
+ const cookie=await demo('Farmer');
+ const r=await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{cost_fertilizer_seeds:4000,cost_labor:5000,cost_processing:3000,cost_transportation:2000}});
+ assert.equal(r.status,200);
+ assert.equal(r.data.cost_fertilizer_seeds,4000);
+ assert.equal(r.data.cost_labor,5000);
+ assert.equal(r.data.cost_processing,3000);
+ assert.equal(r.data.cost_transportation,2000);
+ assert.equal(r.data.avg_production_cost,14000);
+
+ async function sms(body){
+  const params={From:'+27820000001',MessageSid:'SM'+Math.random(),...body};
+  const signature=twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN,process.env.TWILIO_WEBHOOK_URL,params);
+  const resp=await fetch(base+'/webhooks/sms/receive',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature},body:new URLSearchParams(params)});
+  return{status:resp.status,text:await resp.text()};
+ }
+ await sms({Body:'START'});
+ const q1=await sms({Body:'COST'});
+ assert.match(q1.text,/Fertilizer and Seeds/i);
+ const q2=await sms({Body:'4500'});
+ assert.match(q2.text,/Labor/i);
+ const q3=await sms({Body:'5500'});
+ assert.match(q3.text,/Processing/i);
+ const q4=await sms({Body:'3000'});
+ assert.match(q4.text,/Transportation/i);
+ const qFinal=await sms({Body:'2000'});
+ assert.match(qFinal.text,/Total Estimated Cost: ZAR 15000/);
+ const saved=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',['farm-1']);
+ assert.equal(saved.cost_fertilizer_seeds,4500);
+ assert.equal(saved.cost_labor,5500);
+ assert.equal(saved.cost_processing,3000);
+ assert.equal(saved.cost_transportation,2000);
+ assert.equal(saved.avg_production_cost,15000);
+});
+

@@ -1,6 +1,6 @@
 import {demoApi} from './demo';
 export const PRESENTATION_MODE=import.meta.env.VITE_USE_BACKEND!=='true';
-export type Farmer={id:string;user_id:string;farm_name:string;location:string;farm_size:number;verification_status:string;name?:string;phone?:string;baseline_status?:string};
+export type Farmer={id:string;user_id:string;farm_name:string;country?:string;region?:string;district?:string;locality?:string;ward?:string;location:string;farm_size:number;verification_status:string;name?:string;phone?:string;baseline_status?:string};
 export type User={id:string;name:string;phone:string;email?:string;role:'Buyer'|'Farmer'|'Admin';sms_opt_in:boolean;farmer:Farmer|null};
 export type Listing={id:string;farmer_id:string;title:string;crop_category:string;available_volume:number;price:number;harvest_date:string;expiration_date:string;shelf_life_days:number;preservative_used:number;description:string;image:string;farm_name:string;location:string;verification_status:string};
 export type Order={id:string;listing_id:string;title:string;volume:number;delivery_location:string;notes:string;status:string;created_at:string;buyer_name:string;phone:string};
