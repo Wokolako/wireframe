@@ -49,3 +49,70 @@ test('Appendix B: Form 1 Guided Breakdown automatically aggregates costs via API
  assert.equal(saved.avg_production_cost,15000);
 });
 
+test('Appendix C: RBAC enforces financial data isolation and strict role boundaries',async()=>{
+ const buyer=await demo('Buyer');
+ const farmer=await demo('Farmer');
+ const agent=await demo('Agent');
+ const admin=await demo('Admin');
+
+ // 1. Sellers (Farmers): Read/Write strictly limited to their own financial submissions
+ const ownRead=await call('/farmers/farm-1/baseline',{cookie:farmer});
+ assert.equal(ownRead.status,200);
+ const otherRead=await call('/farmers/farm-2/baseline',{cookie:farmer});
+ assert.equal(otherRead.status,403);
+ const otherWrite=await call('/farmers/farm-2/baseline',{cookie:farmer,method:'PATCH',body:{cost_labor:1000}});
+ assert.equal(otherWrite.status,403);
+
+ // 2. Buyers: NO ACCESS to farmer financial data (costs, margins, etc.)
+ const buyerAccess=await call('/farmers/farm-1/baseline',{cookie:buyer});
+ assert.equal(buyerAccess.status,403);
+ const buyerListings=await call('/listings',{cookie:buyer});
+ assert.equal(buyerListings.status,200);
+ assert.ok(buyerListings.data.length>0);
+ for(const item of buyerListings.data){
+  assert.equal(item.cost_fertilizer_seeds,undefined);
+  assert.equal(item.cost_labor,undefined);
+  assert.equal(item.cost_processing,undefined);
+  assert.equal(item.cost_transportation,undefined);
+  assert.equal(item.avg_production_cost,undefined);
+  assert.ok('price' in item);
+  assert.ok('available_volume' in item);
+  assert.ok('traceability' in item);
+  assert.ok('agent_score' in item);
+ }
+
+ // 3. Agents: NO ACCESS to farmer financial data, only physical verification requirements
+ const agentBaseline=await call('/farmers/farm-1/baseline',{cookie:agent});
+ assert.equal(agentBaseline.status,403);
+ const agentAnalytics=await call('/analytics/financial',{cookie:agent});
+ assert.equal(agentAnalytics.status,403);
+
+ const verifs=await call('/verifications',{cookie:agent});
+ assert.equal(verifs.status,200);
+ assert.ok(verifs.data.length>0);
+ const v1=verifs.data[0];
+ assert.ok('farm_name' in v1);
+ assert.ok('location' in v1);
+ assert.ok('country' in v1);
+ assert.ok('region' in v1);
+ assert.ok('farm_size' in v1);
+ assert.ok('verification_status' in v1);
+ assert.equal(v1.cost_fertilizer_seeds,undefined);
+ assert.equal(v1.avg_production_cost,undefined);
+
+ const patchVerif=await call(`/verifications/${v1.id}`,{cookie:agent,method:'PATCH',body:{verification_status:'Verified'}});
+ assert.equal(patchVerif.status,200);
+ assert.equal(patchVerif.data.verification_status,'Verified');
+
+ // 4. Platform Admins: Access to aggregated financial data for platform analytics
+ const buyerAnalytics=await call('/analytics/financial',{cookie:buyer});
+ assert.equal(buyerAnalytics.status,403);
+ const adminAnalytics=await call('/analytics/financial',{cookie:admin});
+ assert.equal(adminAnalytics.status,200);
+ assert.ok(Array.isArray(adminAnalytics.data.regional));
+ assert.ok(Array.isArray(adminAnalytics.data.by_crop));
+ assert.ok('summary' in adminAnalytics.data);
+ assert.ok(adminAnalytics.data.summary.total_submissions>=1);
+});
+
+
