@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone
 CREATE TABLE IF NOT EXISTS clerk_identities (clerk_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id));
 CREATE TABLE IF NOT EXISTS pwa_visitors (id TEXT PRIMARY KEY, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, prompted_at TEXT, dismissed_at TEXT, installed_at TEXT);
 CREATE TABLE IF NOT EXISTS pwa_accounts (user_id TEXT PRIMARY KEY REFERENCES users(id), prompted_at TEXT, dismissed_at TEXT, installed_at TEXT);
-CREATE TABLE IF NOT EXISTS farmer_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id), farm_name TEXT NOT NULL, location TEXT NOT NULL, farm_size REAL NOT NULL DEFAULT 0 CHECK(farm_size >= 0), verification_status TEXT NOT NULL DEFAULT 'Unverified');
-CREATE TABLE IF NOT EXISTS historical_baselines (farmer_id TEXT PRIMARY KEY REFERENCES farmer_profiles(id), crop_type TEXT, avg_land_size REAL, avg_yield_per_acre REAL, avg_duration_days INTEGER, avg_production_cost REAL, status TEXT NOT NULL DEFAULT 'draft', updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS farmer_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id), farm_name TEXT NOT NULL, country TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '', district TEXT, locality TEXT NOT NULL DEFAULT '', ward TEXT, location TEXT NOT NULL DEFAULT '', farm_size REAL NOT NULL DEFAULT 0 CHECK(farm_size >= 0), verification_status TEXT NOT NULL DEFAULT 'Unverified');
+CREATE TABLE IF NOT EXISTS historical_baselines (farmer_id TEXT PRIMARY KEY REFERENCES farmer_profiles(id), crop_type TEXT, avg_land_size REAL, avg_yield_per_acre REAL, avg_duration_days INTEGER, cost_fertilizer_seeds REAL, cost_labor REAL, cost_processing REAL, cost_transportation REAL, avg_production_cost REAL, status TEXT NOT NULL DEFAULT 'draft', updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, farmer_id TEXT NOT NULL REFERENCES farmer_profiles(id), title TEXT NOT NULL, crop_category TEXT NOT NULL, available_volume REAL NOT NULL CHECK(available_volume > 0), price REAL NOT NULL CHECK(price > 0), harvest_date TEXT NOT NULL, expiration_date TEXT NOT NULL, shelf_life_days INTEGER NOT NULL CHECK(shelf_life_days > 0), preservative_used INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '', image TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'published', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS order_requests (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL REFERENCES listings(id), buyer_id TEXT NOT NULL REFERENCES users(id), volume REAL NOT NULL CHECK(volume > 0), delivery_location TEXT NOT NULL, notes TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at TEXT NOT NULL);
@@ -34,4 +34,17 @@ CREATE TABLE IF NOT EXISTS listing_drafts (farmer_id TEXT PRIMARY KEY REFERENCES
 CREATE INDEX IF NOT EXISTS listings_category_idx ON listings(crop_category,harvest_date);
 CREATE INDEX IF NOT EXISTS orders_buyer_idx ON order_requests(buyer_id);
 `);
+  for (const col of [
+    'ALTER TABLE farmer_profiles ADD COLUMN country TEXT NOT NULL DEFAULT ""',
+    'ALTER TABLE farmer_profiles ADD COLUMN region TEXT NOT NULL DEFAULT ""',
+    'ALTER TABLE farmer_profiles ADD COLUMN district TEXT',
+    'ALTER TABLE farmer_profiles ADD COLUMN locality TEXT NOT NULL DEFAULT ""',
+    'ALTER TABLE farmer_profiles ADD COLUMN ward TEXT',
+    'ALTER TABLE historical_baselines ADD COLUMN cost_fertilizer_seeds REAL',
+    'ALTER TABLE historical_baselines ADD COLUMN cost_labor REAL',
+    'ALTER TABLE historical_baselines ADD COLUMN cost_processing REAL',
+    'ALTER TABLE historical_baselines ADD COLUMN cost_transportation REAL'
+  ]) {
+    try { await db.exec(col); } catch {}
+  }
 }

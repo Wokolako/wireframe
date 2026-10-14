@@ -10,8 +10,15 @@ type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buye
 const now=()=>new Date().toISOString();
 const day=(n=0)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
 function seed():State{
- const farms=[['Thandi Mokoena','Mokoena Family Farm','Limpopo',24],['Pieter van der Merwe','Valley View Growers','Western Cape',120],['Nomsa Dlamini','Green Roots Cooperative','KwaZulu-Natal',42]] as const;
- const farmers:Farmer[]=farms.map(([name,farm_name,location,farm_size],i)=>({id:`farm-${i+1}`,user_id:`farmer-${i+1}`,name,farm_name,location,farm_size,phone:`+2782000000${i+1}`,verification_status:i===2?'Pending':'Verified'}));
+ const farms=[
+  ['Thandi Mokoena','Mokoena Family Farm','South Africa','Capricorn District','Polokwane Ward 12',24],
+  ['Pieter van der Merwe','Valley View Growers','South Africa','Cape Winelands','Stellenbosch Ward 8',120],
+  ['Nomsa Dlamini','Green Roots Cooperative','South Africa','uMgungundlovu','Msunduzi Ward 22',42]
+ ] as const;
+ const farmers:Farmer[]=farms.map(([name,farm_name,country,region,locality,farm_size],i)=>{
+  const location=`${locality}, ${region}, ${country}`;
+  return {id:`farm-${i+1}`,user_id:`farmer-${i+1}`,name,farm_name,country,region,district:region,locality,ward:locality,location,farm_size,phone:`+2782000000${i+1}`,verification_status:i===2?'Pending':'Verified'};
+ });
  const users:User[]=[...farmers.map(f=>({id:f.user_id,name:f.name!,phone:f.phone!,role:'Farmer' as const,sms_opt_in:false,farmer:f})),{id:'buyer-1',name:'Alex Morgan',phone:'+27820000004',role:'Buyer',sms_opt_in:false,farmer:null},{id:'admin-1',name:'Wirefen Operations',phone:'+27820000005',role:'Admin',sms_opt_in:false,farmer:null}];
  const products:[string,string,number,number,number,string,number,string][]=[
  ['Roma tomatoes','Vegetables',2500,12.5,0,'tomatoes',10,'Firm, sun-ripened Roma tomatoes, sorted and packed in reusable crates.'],
@@ -21,7 +28,7 @@ function seed():State{
  ['Green cabbage','Vegetables',3600,6.8,2,'cabbage',14,'Crisp green cabbages with tightly packed leaves, supplied in bulk crates.'],
  ['Red kidney beans','Legumes',6000,24,1,'beans',180,'Dried red kidney beans, sorted for wholesalers and processors.']];
  const listings:Listing[]=products.map(([title,crop_category,available_volume,price,f,image,shelf_life_days,description],i)=>({id:`produce-${i+1}`,farmer_id:farmers[f].id,title,crop_category,available_volume,price,harvest_date:day(-1),expiration_date:day(shelf_life_days),shelf_life_days,preservative_used:0,description,image:`/images/${image}.jpg`,farm_name:farmers[f].farm_name,location:farmers[f].location,verification_status:farmers[f].verification_status}));
- return {users,farmers,listings,session:null,drafts:{},baselines:{'farm-2':{crop_type:'Maize',avg_land_size:80,avg_yield_per_acre:3200,avg_duration_days:120,avg_production_cost:96000,status:'complete'}},orders:[{id:'sample-order-1',listing_id:'produce-1',title:'Roma tomatoes',volume:250,delivery_location:'Pretoria fresh market',notes:'Sample request: Friday morning collection.',status:'In review',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'},{id:'sample-order-2',listing_id:'produce-2',title:'Golden yellow maize',volume:5000,delivery_location:'Cape Town distribution centre',notes:'Sample request: bulk packaging preferred.',status:'New',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'}],pwa:{}};
+  return {users,farmers,listings,session:null,drafts:{},baselines:{'farm-2':{crop_type:'Maize',avg_land_size:80,avg_yield_per_acre:3200,avg_duration_days:120,cost_fertilizer_seeds:32000,cost_labor:40000,cost_processing:14000,cost_transportation:10000,avg_production_cost:96000,status:'complete'}},orders:[{id:'sample-order-1',listing_id:'produce-1',title:'Roma tomatoes',volume:250,delivery_location:'Pretoria fresh market',notes:'Sample request: Friday morning collection.',status:'In review',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'},{id:'sample-order-2',listing_id:'produce-2',title:'Golden yellow maize',volume:5000,delivery_location:'Cape Town distribution centre',notes:'Sample request: bulk packaging preferred.',status:'New',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'}],pwa:{}};
 }
 let memory:State|undefined;
 function load():State{try{const saved=localStorage.getItem(key);if(saved)return JSON.parse(saved);}catch{}return memory??=seed();}
@@ -45,7 +52,16 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   if(name.length<2||!/^\+[1-9]\d{7,14}$/.test(phone))throw new Error('Enter your name and a phone number with its country code.');
   if(data.users.some(u=>u.phone===phone))throw new Error('This phone number is already used by another profile on this device.');
   let farmer:Farmer|null=null;
-  if(role==='Farmer'){if(!String(body.farm_name||'').trim()||!String(body.location||'').trim())throw new Error('Enter your farm name and location.');farmer={id:'farm-'+identity.id,user_id:identity.id,name,phone,farm_name:String(body.farm_name),location:String(body.location),farm_size:0,verification_status:'Unverified'};data.farmers.push(farmer);}
+  if(role==='Farmer'){
+   const farm_name=String(body.farm_name||'').trim();
+   const country=String(body.country||'South Africa').trim();
+   const region=String(body.region||body.district||body.location||'').trim();
+   const locality=String(body.locality||body.ward||body.location||'').trim();
+   const location=String(body.location||[locality,region,country].filter(Boolean).join(', ')).trim();
+   if(!farm_name||(!location&&(!country||!region||!locality)))throw new Error('Enter your farm name and location.');
+   farmer={id:'farm-'+identity.id,user_id:identity.id,name,phone,farm_name,country,region,district:region,locality,ward:locality,location,farm_size:0,verification_status:'Unverified'};
+   data.farmers.push(farmer);
+  }
   user={id:identity.id,name,email:identity.email,phone,role,sms_opt_in:!!body.sms_opt_in,farmer};data.users.push(user);return finish(user);
  }
  if(route==='/auth/demo')throw new Error('Sample account switching is disabled. Sign in with your Clerk account.');
@@ -56,7 +72,22 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  if(route==='/account/consent'){account(['Farmer','Buyer','Admin']).sms_opt_in=!!body.sms_opt_in;return finish({ok:true});}
  if(route==='/farmers'){account(['Admin']);return finish(data.farmers.map(f=>({...f,baseline_status:data.baselines[f.id]?.status})));}
  const farmRoute=route.match(/^\/farmers\/([^/]+)\/(baseline|listing-draft)$/);
- if(farmRoute){const u=account(['Farmer','Admin']),[,id,kind]=farmRoute,farm=data.farmers.find(f=>f.id===id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');const table=kind==='baseline'?data.baselines:data.drafts;if(method!=='GET')table[id]={...table[id],...body,updated_at:now()};return finish(table[id]||(kind==='baseline'?{status:'draft'}:{}));}
+ if(farmRoute){
+  const u=account(['Farmer','Admin']),[,id,kind]=farmRoute,farm=data.farmers.find(f=>f.id===id);
+  if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');
+  const table=kind==='baseline'?data.baselines:data.drafts;
+  if(method!=='GET'){
+   const updateData={...body};
+   if(kind==='baseline'){
+    const hasBreakdown=['cost_fertilizer_seeds','cost_labor','cost_processing','cost_transportation'].some(k=>updateData[k]!==undefined&&updateData[k]!==null);
+    if(hasBreakdown){
+     updateData.avg_production_cost=(Number(updateData.cost_fertilizer_seeds)||0)+(Number(updateData.cost_labor)||0)+(Number(updateData.cost_processing)||0)+(Number(updateData.cost_transportation)||0);
+    }
+   }
+   table[id]={...table[id],...updateData,updated_at:now()};
+  }
+  return finish(table[id]||(kind==='baseline'?{status:'draft'}:{}));
+ }
  if(route==='/listings'&&method==='GET')return finish(data.listings.filter(l=>(!q.has('mine')||l.farmer_id===user?.farmer?.id)&&(!q.get('category')||l.crop_category===q.get('category'))&&(!q.get('search')||`${l.title} ${l.farm_name} ${l.location}`.toLowerCase().includes(q.get('search')!.toLowerCase()))&&(!q.get('min_volume')||l.available_volume>=Number(q.get('min_volume')))&&(!q.get('max_volume')||l.available_volume<=Number(q.get('max_volume')))&&(!q.get('harvest_date_after')||l.harvest_date>q.get('harvest_date_after')!)&&(!q.has('preservative')||!!l.preservative_used===(q.get('preservative')==='true'))));
  if(route==='/listings'&&method==='POST'){
   const u=account(['Farmer','Admin']),farm=data.farmers.find(f=>f.id===body.farmer_id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');

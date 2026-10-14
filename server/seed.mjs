@@ -5,7 +5,12 @@ export async function seed(db) {
  const now = new Date().toISOString();
  const users = [['farmer-1','Thandi Mokoena','+27820000001','Farmer'],['farmer-2','Pieter van der Merwe','+27820000002','Farmer'],['farmer-3','Nomsa Dlamini','+27820000003','Farmer'],['buyer-1','Alex Morgan','+27820000004','Buyer'],['admin-1','Wirefen Operations','+27820000005','Admin']];
  for(const [id,name,phone,role] of users) await db.run('INSERT INTO users (id,name,phone,password_hash,role,created_at) VALUES (?,?,?,?,?,?)',[id,name,phone,hashPassword(randomUUID()),role,now]);
- for(const row of [['farm-1','farmer-1','Mokoena Family Farm','Limpopo',24,'Verified'],['farm-2','farmer-2','Valley View Growers','Western Cape',120,'Verified'],['farm-3','farmer-3','Green Roots Cooperative','KwaZulu-Natal',42,'Pending']]) await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,location,farm_size,verification_status) VALUES (?,?,?,?,?,?)',row);
+ const seedFarmers = [
+  ['farm-1','farmer-1','Mokoena Family Farm','South Africa','Capricorn District','Capricorn District','Polokwane Ward 12','Polokwane Ward 12','Polokwane Ward 12, Capricorn District, South Africa',24,'Verified'],
+  ['farm-2','farmer-2','Valley View Growers','South Africa','Cape Winelands','Cape Winelands','Stellenbosch Ward 8','Stellenbosch Ward 8','Stellenbosch Ward 8, Cape Winelands, South Africa',120,'Verified'],
+  ['farm-3','farmer-3','Green Roots Cooperative','South Africa','uMgungundlovu','uMgungundlovu','Msunduzi Ward 22','Msunduzi Ward 22','Msunduzi Ward 22, uMgungundlovu, South Africa',42,'Pending']
+ ];
+ for(const row of seedFarmers) await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location,farm_size,verification_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',row);
  const date = offset => new Date(Date.now()+offset*86400000).toISOString().slice(0,10);
  const products = [
  ['Roma tomatoes','Vegetables',2500,12.5,'farm-1','tomatoes',-1,10,'Firm, sun-ripened Roma tomatoes, sorted and packed in reusable crates. Ideal for fresh markets and food service.'],

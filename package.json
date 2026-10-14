@@ -15,12 +15,17 @@
     "dev:full": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "preview": "vite preview --host 127.0.0.1",
     "start:api": "node --env-file-if-exists=.env server/index.mjs",
-    "test:presentation": "node tests/presentation-ui.mjs"
+    "test:presentation": "node tests/presentation-ui.mjs",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:studio": "prisma studio"
   },
   "dependencies": {
     "@clerk/express": "^2.1.78",
     "@clerk/react": "^6.17.8",
     "@fontsource/dm-sans": "^5.2.6",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
@@ -34,11 +39,13 @@
   },
   "devDependencies": {
     "@clerk/testing": "^2.2.45",
+    "@prisma/config": "^7.10.0",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^9.2.1",
     "playwright": "^1.55.0",
+    "prisma": "^7.10.0",
     "typescript": "~5.9.2",
     "vite": "^6.3.6"
   },
