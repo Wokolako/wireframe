@@ -104,6 +104,129 @@ app.get('/api/v1/analytics/financial',permit('Admin'),async(req,res)=>{
 app.post('/api/v1/orders',permit('Buyer'),async(req,res)=>{const v=z.object({listing_id:z.string(),volume:z.number().positive(),delivery_location:z.string().trim().min(3).max(200),notes:z.string().max(1000).default('')}).parse(req.body);const l=await db.get("SELECT * FROM listings WHERE id=? AND status='published' AND expiration_date>=?",[v.listing_id,now().slice(0,10)]);if(!l)throw fail(404,'This listing is no longer available.');if(v.volume>l.available_volume)throw fail(400,'Requested volume exceeds available supply.');const id=randomUUID();await db.run('INSERT INTO order_requests (id,listing_id,buyer_id,volume,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?)',[id,v.listing_id,req.user.id,v.volume,v.delivery_location,v.notes,now()]);res.status(201).json({id,status:'New'});});
 app.get('/api/v1/orders',permit('Buyer','Admin'),async(req,res)=>res.json(await db.all('SELECT o.*,l.title,u.name AS buyer_name,u.phone FROM order_requests o JOIN listings l ON l.id=o.listing_id JOIN users u ON u.id=o.buyer_id'+(req.user.role==='Buyer'?' WHERE o.buyer_id=?':'')+' ORDER BY o.created_at DESC',req.user.role==='Buyer'?[req.user.id]:[])));
 app.patch('/api/v1/orders/:id',permit('Admin'),async(req,res)=>{const {status}=z.object({status:z.enum(['New','In review','Contacted','Closed'])}).parse(req.body);if(!await db.get('SELECT id FROM order_requests WHERE id=?',[req.params.id]))throw fail(404,'Request not found.');await db.run('UPDATE order_requests SET status=? WHERE id=?',[status,req.params.id]);res.json({ok:true});});
+app.post('/api/v1/payments',permit('Buyer','Admin'),async(req,res)=>{
+ const v=z.object({order_id:z.string(),amount:z.number().positive().max(1e12),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR']),method:z.enum(['malawian_bank','airtel_money_mw','tnm_mpamba','zambian_momo','card']),provider:z.string().trim().max(100),bank_name:z.string().trim().max(100).optional(),account_or_phone:z.string().trim().min(3).max(50),notes:z.string().trim().max(500).optional()}).parse(req.body);
+ const order=await db.get('SELECT * FROM order_requests WHERE id=?',[v.order_id]);
+ if(!order)throw fail(404,'Order request not found.');
+ if(req.user.role==='Buyer'&&order.buyer_id!==req.user.id)throw fail(403,'You can only pay for your own order requests.');
+ if(order.payment_status==='paid')throw fail(400,'This order has already been paid.');
+ const paymentId=randomUUID(),stamp=now();
+ const prefix=v.currency==='MWK'?'MWK':v.currency==='ZMW'?'ZMW':v.currency;
+ const ref=`WF-${prefix}-${Date.now().toString().slice(-6)}-${randomBytes(3).toString('hex').toUpperCase()}`;
+ await db.run('INSERT INTO payments (id,order_id,buyer_id,amount,currency,method,provider,account_or_phone,bank_name,status,reference,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',[paymentId,v.order_id,order.buyer_id,v.amount,v.currency,v.method,v.provider,v.account_or_phone,v.bank_name||'','completed',ref,v.notes||'',stamp]);
+ await db.run("UPDATE order_requests SET payment_status='paid',payment_ref=?,payment_method=?,amount_paid=?,currency=?,status=CASE WHEN status='New' THEN 'In review' ELSE status END WHERE id=?",[ref,`${v.method}: ${v.provider}${v.bank_name?' ('+v.bank_name+')':''}`,v.amount,v.currency,v.order_id]);
+ res.status(201).json({id:paymentId,order_id:v.order_id,amount:v.amount,currency:v.currency,method:v.method,provider:v.provider,bank_name:v.bank_name||'',status:'completed',reference:ref,created_at:stamp});
+});
+app.get('/api/v1/payments',permit('Buyer','Admin'),async(req,res)=>{
+ const where=req.user.role==='Buyer'?' WHERE buyer_id=?':'';
+ res.json(await db.all('SELECT * FROM payments'+where+' ORDER BY created_at DESC',req.user.role==='Buyer'?[req.user.id]:[]));
+});
+app.get('/api/v1/payments/:orderId',permit('Buyer','Admin'),async(req,res)=>{
+ const order=await db.get('SELECT * FROM order_requests WHERE id=?',[req.params.orderId]);
+ if(!order)throw fail(404,'Order request not found.');
+ if(req.user.role==='Buyer'&&order.buyer_id!==req.user.id)throw fail(403,'Access denied.');
+ res.json(await db.all('SELECT * FROM payments WHERE order_id=? ORDER BY created_at DESC',[req.params.orderId]));
+});
+
+export async function processUssdSession({sessionId,phoneNumber,text='',serviceCode='*211#'}){
+ const rawParts=(text||'').split('*').map(s=>s.trim());
+ const parts=(rawParts.length===1&&rawParts[0]==='')?[]:rawParts;
+ const user=await db.get('SELECT * FROM users WHERE phone=?',[phoneNumber]);
+ const currency=phoneNumber.startsWith('+265')?'MWK':phoneNumber.startsWith('+260')?'ZMW':(process.env.CURRENCY||'MWK');
+
+ if(!user){
+  if(parts.length===0){
+   return 'CON Welcome to Wirefen Marketplace\n1. Register as Farmer\n2. Register as Buyer\n3. Check Crop Prices ('+currency+')\n0. Exit';
+  }
+  const choice=parts[0];
+  if(choice==='1'){
+   if(parts.length===1)return 'CON Enter your Full Name:';
+   if(parts.length===2)return 'CON Select your Country:\n1. Malawi\n2. Zambia';
+   const country=parts[2]==='2'?'Zambia':'Malawi';
+   if(parts.length===3)return `CON Enter your District in ${country} (e.g. Lilongwe, Kasungu, Chipata):`;
+   if(parts.length===4)return 'CON Enter your Ward or Locality (e.g. Mitundu, Chulu):';
+   if(parts.length>=5){
+    const name=parts[1],district=parts[3],locality=parts[4],id=randomUUID(),stamp=now();
+    await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,name,phoneNumber,hashPassword(randomUUID()),'Farmer',1,stamp,stamp]);
+    await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location) VALUES (?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,country,district,district,locality,locality,`${locality}, ${district}, ${country}`]);
+    await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,1,stamp,'ussd']);
+    return `END Welcome to Wirefen, ${name}!\nYour Farmer profile is active in ${district}, ${country}. Dial *211# anytime to check prices or record farm costs.`;
+   }
+  } else if(choice==='2'){
+   if(parts.length===1)return 'CON Enter your Name or Business:';
+   if(parts.length===2)return 'CON Select your Country:\n1. Malawi\n2. Zambia';
+   const country=parts[2]==='2'?'Zambia':'Malawi';
+   if(parts.length===3)return 'CON Enter your City/District (e.g. Blantyre, Lilongwe, Lusaka):';
+   if(parts.length>=4){
+    const name=parts[1],city=parts[3],id=randomUUID(),stamp=now();
+    await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,name,phoneNumber,hashPassword(randomUUID()),'Buyer',1,stamp,stamp]);
+    await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,1,stamp,'ussd']);
+    return `END Welcome to Wirefen, ${name}!\nYour Buyer account is registered in ${city}, ${country}. Dial *211# or visit wirefen.com to place orders.`;
+   }
+  } else if(choice==='3'){
+   return 'END Wirefen Market Prices:\nMaize: MWK 850 / ZMW 14/kg\nTomatoes: MWK 1,500 / ZMW 25/kg\nSoya Beans: MWK 1,200 / ZMW 20/kg\nPotatoes: MWK 1,100 / ZMW 18/kg';
+  } else if(choice==='0'){
+   return 'END Thank you for visiting Wirefen Marketplace. Dial *211# anytime.';
+  }
+  return 'CON Invalid option.\n1. Register as Farmer\n2. Register as Buyer\n3. Check Crop Prices\n0. Exit';
+ }
+
+ const farm=user.role==='Farmer'?await db.get('SELECT * FROM farmer_profiles WHERE user_id=?',[user.id]):null;
+ if(parts.length===0){
+  if(user.role==='Farmer')return `CON Wirefen Farmer: Muli bwanji ${user.name.split(' ')[0]}!\n1. Check Crop Prices\n2. Record Form 1 Farm Costs\n3. My Farm Profile\n0. Exit`;
+  return `CON Wirefen: Muli bwanji ${user.name.split(' ')[0]}!\n1. Check Crop Prices\n2. My Orders\n0. Exit`;
+ }
+
+ const choice=parts[0];
+ if(choice==='1')return 'END Wirefen Market Prices:\nMaize: MWK 850 / ZMW 14/kg\nTomatoes: MWK 1,500 / ZMW 25/kg\nSoya Beans: MWK 1,200 / ZMW 20/kg\nPotatoes: MWK 1,100 / ZMW 18/kg';
+ if(user.role==='Farmer'&&choice==='2'){
+  if(parts.length===1)return 'CON Form 1 Financial Breakdown (1/4):\nExpected spend for Fertilizer & Seeds? (Reply 0 to skip):';
+  if(parts.length===2)return 'CON Step 2/4: Expected spend for Labor (planting & weeding)? (Reply 0 to skip):';
+  if(parts.length===3)return 'CON Step 3/4: Expected spend for Processing (post-harvest prep)? (Reply 0 to skip):';
+  if(parts.length===4)return 'CON Step 4/4: Expected spend for Transportation? (Reply 0 to skip):';
+  if(parts.length>=5){
+   const c1=Number(parts[1])||0,c2=Number(parts[2])||0,c3=Number(parts[3])||0,c4=Number(parts[4])||0;
+   const total=c1+c2+c3+c4;
+   if(farm){
+    await db.run("INSERT INTO historical_baselines (farmer_id,cost_fertilizer_seeds,cost_labor,cost_processing,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(farmer_id) DO UPDATE SET cost_fertilizer_seeds=excluded.cost_fertilizer_seeds,cost_labor=excluded.cost_labor,cost_processing=excluded.cost_processing,cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status='draft',updated_at=excluded.updated_at",[farm.id,c1,c2,c3,c4,total,'draft',now()]);
+   }
+   return `END Costs saved!\nFertilizer: ${c1}\nLabor: ${c2}\nProcessing: ${c3}\nTransport: ${c4}\nTotal Estimated Cost: ${currency} ${total}.\nThank you!`;
+  }
+ }
+ if(user.role==='Farmer'&&choice==='3'){
+  if(!farm)return 'END Farm details not found. Please contact support.';
+  return `END Farm: ${farm.farm_name}\nLocation: ${farm.location||farm.district||'Malawi'}\nStatus: ${farm.verification_status}\nPhone: ${user.phone}`;
+ }
+ if(user.role==='Buyer'&&choice==='2'){
+  const orders=await db.all('SELECT o.*,l.title FROM order_requests o JOIN listings l ON l.id=o.listing_id WHERE o.buyer_id=? ORDER BY o.created_at DESC LIMIT 3',[user.id]);
+  if(!orders.length)return 'END You have no active orders. Browse listings on wirefen.com.';
+  return `END Recent Orders:\n${orders.map(o=>`${o.title.slice(0,15)}: ${o.payment_status==='paid'?'PAID':o.status}`).join('\n')}`;
+ }
+ if(choice==='0')return 'END Thank you for using Wirefen. Dial *211# anytime.';
+ return 'END Invalid option selected. Dial *211# to start again.';
+}
+
+app.post('/api/v1/webhooks/ussd',async(req,res)=>{
+ try{
+  const sessionId=req.body.sessionId||randomUUID(),serviceCode=req.body.serviceCode||'*211#';
+  const phoneNumber=req.body.phoneNumber||req.body.phone||'';
+  const text=req.body.text??'';
+  if(!phoneNumber)return res.type('text/plain').send('END Phone number is required.');
+  const response=await processUssdSession({sessionId,phoneNumber,text,serviceCode});
+  res.type('text/plain').send(response);
+ }catch(err){
+  console.error('USSD error:',err);
+  res.type('text/plain').send('END An error occurred. Please try again.');
+ }
+});
+
+app.post('/api/v1/ussd/simulate',async(req,res)=>{
+ const v=z.object({phoneNumber:phone,text:z.string().max(200).default(''),serviceCode:z.string().max(20).default('*211#'),sessionId:z.string().max(100).optional()}).parse(req.body);
+ const sessionId=v.sessionId||randomUUID();
+ const response=await processUssdSession({sessionId,phoneNumber:v.phoneNumber,text:v.text,serviceCode:v.serviceCode});
+ res.json({sessionId,phoneNumber:v.phoneNumber,response,isEnd:response.startsWith('END'),menuText:response.replace(/^(CON|END)\s+/,'')});
+});
+
 const smsLimit=rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false});
 app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
  const token=process.env.TWILIO_AUTH_TOKEN,url=process.env.TWILIO_WEBHOOK_URL;
@@ -112,7 +235,28 @@ app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
  const {From,Body,MessageSid}=z.object({From:phone,Body:z.string().max(1600),MessageSid:z.string().min(1).max(80)}).parse(req.body);
  const xml=message=>{const response=new twilio.twiml.MessagingResponse();if(message)response.message(message);res.type('text/xml').send(response.toString());};
  if(await db.get('SELECT message_sid FROM sms_messages WHERE message_sid=?',[MessageSid]))return xml();
- const u=await db.get('SELECT * FROM users WHERE phone=?',[From]);if(!u)return xml('Please register your phone number on Wirefen first.');
+ const u=await db.get('SELECT * FROM users WHERE phone=?',[From]);
+ if(!u){
+  const clean=Body.trim(),upper=clean.toUpperCase();
+  if(upper.startsWith('JOIN')||upper.startsWith('SIGNUP')){
+   const match=clean.match(/^(?:JOIN|SIGNUP)\s+(FARMER|BUYER)\s+(.+)$/i);
+   if(match){
+    const role=match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
+    const rest=match[2].split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
+    const name=rest[0]||'Wirefen User',country=rest[1]||'Malawi',district=rest[2]||'Lilongwe',locality=rest[3]||'Mitundu';
+    const id=randomUUID(),stamp=now();
+    await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,name,From,hashPassword(randomUUID()),role,1,stamp,stamp]);
+    if(role==='Farmer'){
+     await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location) VALUES (?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,country,district,district,locality,locality,`${locality}, ${district}, ${country}`]);
+    }
+    await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,1,stamp,'sms']);
+    await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);
+    return xml(`Welcome to Wirefen, ${name}! Your ${role} account is registered. Reply BASELINE to record farm yield, COST for cost breakdown, or dial *211#.`);
+   }
+   return xml('To register via SMS, reply: JOIN FARMER <Name>, <Country>, <District>, <Locality> or dial *211# for interactive menu.');
+  }
+  return xml('Welcome to Wirefen! To register, reply JOIN FARMER <Name>, <Country>, <District>, <Locality> or dial *211# on your phone.');
+ }
  const command=Body.trim().toUpperCase();
  if(['STOP','START'].includes(command)){const opt=+(command==='START');await db.run('UPDATE users SET sms_opt_in=?,sms_opt_in_at=? WHERE id=?',[opt,opt?now():null,u.id]);await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),u.id,opt,now(),'sms']);await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);return xml(opt?'SMS updates enabled. Reply BASELINE to record yield.':'SMS updates stopped. Reply START to opt in again.');}
  if(!u.sms_opt_in)return xml('Reply START to opt in to Wirefen SMS.');

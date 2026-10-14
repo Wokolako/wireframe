@@ -4,9 +4,13 @@ import {PRESENTATION_MODE,api,readLocal,writeLocal} from './api';
 
 type Rates={base:string;rates:Record<string,number>;dates:Record<string,string>;fetched_at:string;source:string;stale:boolean;demo?:boolean};
 const MAX_AGE=7*86400000;
-export const formatMoney=(amount:number,currency:string)=>new Intl.NumberFormat(currency==='EUR'?'en-IE':currency==='USD'?'en-US':'en-ZA',{style:'currency',currency}).format(amount);
+export const formatMoney=(amount:number,currency:string)=>{
+ if(currency==='MWK')return `MWK ${new Intl.NumberFormat('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2}).format(amount)}`;
+ if(currency==='ZMW')return `ZMW ${new Intl.NumberFormat('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2}).format(amount)}`;
+ return new Intl.NumberFormat(currency==='EUR'?'en-IE':currency==='USD'?'en-US':'en-ZA',{style:'currency',currency}).format(amount);
+};
 function usable(value:Rates|null,market:string):value is Rates {
- return !!value&&value.base==='EUR'&&['EUR','USD',market].every(c=>Number.isFinite(value.rates?.[c])&&value.rates[c]>0)&&Object.keys(value.dates||{}).length>0&&Object.values(value.dates).every(d=>Number.isFinite(Date.parse(d))&&Date.now()-Date.parse(d)<=MAX_AGE);
+ return !!value&&value.base==='EUR'&&['EUR','USD'].every(c=>Number.isFinite(value.rates?.[c])&&value.rates[c]>0)&&(!value.rates[market]||value.rates[market]>0)&&Object.keys(value.dates||{}).length>0&&Object.values(value.dates).every(d=>Number.isFinite(Date.parse(d))&&Date.now()-Date.parse(d)<=MAX_AGE);
 }
 export function useCurrency(market:string,online:boolean){
  const [preference,setPreference]=useState(()=>readLocal<string>('wirefen-display-currency',''));
@@ -21,7 +25,7 @@ export function useCurrency(market:string,online:boolean){
   finally{setLoading(false);}
  },[market]);
  useEffect(()=>{void refresh();const timer=setInterval(()=>void refresh(),3600000);return()=>clearInterval(timer);},[refresh,online]);
- const currencies=[...new Set([market,'EUR','USD'])];
+ const currencies=[...new Set([market,'MWK','ZMW','ZAR','USD','EUR'])];
  const validRates=usable(rates,market)?rates:null;
  const currency=currencies.includes(preference)&&(preference===market||validRates)?preference:market;
  const choose=(value:string)=>{setPreference(value);writeLocal('wirefen-display-currency',value);};
@@ -30,7 +34,10 @@ export function useCurrency(market:string,online:boolean){
  return {market,currency,currencies,rates:validRates,loading,error,choose,convert,money,refresh};
 }
 export type CurrencyState=ReturnType<typeof useCurrency>;
-export function CurrencySelect({fx}:{fx:CurrencyState}){return <label className="currency-select"><span className="sr-only">Display currency</span><select aria-label="Display currency" value={fx.currency} onChange={e=>fx.choose(e.target.value)}>{fx.currencies.map(c=><option key={c} value={c} disabled={c!==fx.market&&!fx.rates}>{c}{c==='EUR'?' €':c==='USD'?' $':''}</option>)}</select></label>;}
+export function CurrencySelect({fx}:{fx:CurrencyState}){
+ const symbols:Record<string,string>={MWK:' MK',ZMW:' ZK',ZAR:' R',EUR:' €',USD:' $'};
+ return <label className="currency-select"><span className="sr-only">Display currency</span><select aria-label="Display currency" value={fx.currency} onChange={e=>fx.choose(e.target.value)}>{fx.currencies.map(c=><option key={c} value={c} disabled={c!==fx.market&&!fx.rates}>{c}{symbols[c]||''}</option>)}</select></label>;
+}
 export function CurrencyNotice({fx}:{fx:CurrencyState}){if(fx.currency===fx.market)return null;return <div className="currency-notice" role="status">Prices shown in {fx.currency} are estimates. Original prices are in {fx.market}. {fx.rates?.stale?'Using saved rates. ':''}<a href="#/converter">View exchange rates</a></div>;}
 export function CurrencyConverter({fx}:{fx:CurrencyState}){
  const [amount,setAmount]=useState('100'),[from,setFrom]=useState('EUR'),[to,setTo]=useState('USD');

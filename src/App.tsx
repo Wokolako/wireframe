@@ -1,10 +1,10 @@
 import {useEffect,useRef,useState,type FormEvent,type ReactNode} from 'react';
-import {ArrowDownUp,ArrowLeft,ArrowRight,ArrowUpRight,Bookmark,Check,CheckCheck,ChevronDown,ChevronRight,CircleHelp,ClipboardList,Clock,Flower2,LayoutGrid,Leaf,LogOut,MapPin,Menu,Package,Plus,Search,Settings,ShieldCheck,SlidersHorizontal,Sprout,Tractor,Users,WifiOff,X,Wheat,Apple,Carrot,Bean,CheckCircle2,Phone,Download,RefreshCw} from 'lucide-react';
+import {ArrowDownUp,ArrowLeft,ArrowRight,ArrowUpRight,Bookmark,Check,CheckCheck,ChevronDown,ChevronRight,CircleHelp,ClipboardList,Clock,Flower2,LayoutGrid,Leaf,LogOut,MapPin,Menu,Package,Plus,Search,Settings,ShieldCheck,SlidersHorizontal,Sprout,Tractor,Users,WifiOff,X,Wheat,Apple,Carrot,Bean,CheckCircle2,Phone,Download,RefreshCw,CreditCard,Smartphone,Receipt,Building2,Send} from 'lucide-react';
 import {Onboarding,type AuthBridge} from './auth';
 import {GetApp,InstallInvitation,useInstall} from './pwa';
 import {CurrencyConverter,CurrencySelect,CurrencyNotice,useCurrency} from './currency';
 import {ArrowRightLeft} from 'lucide-react';
-import {PRESENTATION_MODE,api,send,number,date,readLocal,writeLocal,type User,type Listing,type Order,type Farmer,type Config,type FarmVerification,type RegionalFinancialAnalytics} from './api';
+import {PRESENTATION_MODE,api,send,number,date,readLocal,writeLocal,type User,type Listing,type Order,type Farmer,type Config,type FarmVerification,type RegionalFinancialAnalytics,type Payment,type UssdSimulateResult} from './api';
 
 const categories=[{name:'All produce',icon:LayoutGrid},{name:'Vegetables',icon:Carrot},{name:'Fruits',icon:Apple},{name:'Grains',icon:Wheat},{name:'Tubers',icon:Sprout},{name:'Legumes',icon:Bean}];
 const go=(path:string)=>{window.location.hash=path;};
@@ -15,7 +15,7 @@ function Empty({title,children,action}:{title:string;children:ReactNode;action?:
 function Field({label,children,hint}:{label:string;children:ReactNode;hint?:string}){return <label className="field"><span>{label}</span>{children}{hint&&<small>{hint}</small>}</label>;}
 
 export function App({identity,offlineClerk=false}:{identity?:AuthBridge;offlineClerk?:boolean}){
- const route=useRoute();const [user,setUser]=useState<User|null>(()=>navigator.onLine?null:readLocal('wirefen-session',null));const [config,setConfig]=useState<Config>({demo:false,market:'',currency:'ZAR',sms_ready:false});const [auth,setAuth]=useState(false);const [online,setOnline]=useState(navigator.onLine);const [menu,setMenu]=useState(false);const [notice,setNotice]=useState('');const [sessionReady,setSessionReady]=useState(false);const [saved,setSaved]=useState<string[]>(()=>readLocal('wirefen-saved',[]));const main=useRef<HTMLElement>(null);
+ const route=useRoute();const [user,setUser]=useState<User|null>(()=>navigator.onLine?null:readLocal('wirefen-session',null));const [config,setConfig]=useState<Config>({demo:false,market:'',currency:'ZAR',sms_ready:false});const [auth,setAuth]=useState(false);const [ussdOpen,setUssdOpen]=useState(false);const [online,setOnline]=useState(navigator.onLine);const [menu,setMenu]=useState(false);const [notice,setNotice]=useState('');const [sessionReady,setSessionReady]=useState(false);const [saved,setSaved]=useState<string[]>(()=>readLocal('wirefen-saved',[]));const main=useRef<HTMLElement>(null);
  const pwa=useInstall({ready:sessionReady&&(!identity||identity.ready),userId:user?.id,online});
  useEffect(()=>{if(identity&&!identity.ready)return;setSessionReady(false);let alive=true;Promise.all([api<User|null>('/auth/me'),api<Config>('/config')]).then(([u,c])=>{if(!alive)return;setUser(u);setConfig(c);writeLocal('wirefen-session',u);writeLocal('wirefen-config',c);}).catch(()=>{if(!navigator.onLine){setUser(readLocal('wirefen-session',null));setConfig(readLocal('wirefen-config',{demo:false,market:'Offline catalogue',currency:'ZAR',sms_ready:false}));}else setNotice('Could not connect to Wirefen. Check your connection and refresh.');}).finally(()=>{if(alive)setSessionReady(true);});const on=()=>{if(offlineClerk)location.reload();else setOnline(true);},off=()=>setOnline(false);window.addEventListener('online',on);window.addEventListener('offline',off);return()=>{alive=false;window.removeEventListener('online',on);window.removeEventListener('offline',off);};},[identity?.ready,identity?.sessionId]);
  useEffect(()=>{setMenu(false);main.current?.focus({preventScroll:true});},[route]);useEffect(()=>{const escape=(e:KeyboardEvent)=>{if(e.key==='Escape')setMenu(false);};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape);},[]);
@@ -29,9 +29,9 @@ export function App({identity,offlineClerk=false}:{identity?:AuthBridge;offlineC
  const nav=[{path:'/marketplace',label:'Marketplace',icon:LayoutGrid},{path:'/saved',label:'Saved produce',icon:Bookmark,count:saved.length},{path:'/requests',label:'Order requests',icon:ClipboardList},{path:'/converter',label:'Currency converter',icon:ArrowRightLeft},...(user?.role==='Farmer'?[{path:'/farm',label:'My farm',icon:Tractor},{path:'/baseline',label:'Growing history',icon:Sprout}]:[]),...(user?.role==='Agent'?[{path:'/verifications',label:'Verifications',icon:ShieldCheck}]:[]),...(user?.role==='Admin'?[{path:'/admin',label:'Admin assist',icon:Users},{path:'/verifications',label:'Verifications',icon:ShieldCheck}]:[])];
  const current=nav.find(n=>route.startsWith(n.path))?.label||(route.startsWith('/produce')?'Produce details':route.startsWith('/baseline')?'Growing history':route.startsWith('/new-listing')?'Create listing':route==='/verifications'?'Physical verifications':route==='/get-app'?'Get the app':route==='/settings'?'Account settings':route==='/help'?'Help & support':'Wirefen');
  const gate=(roles:string[],content:ReactNode)=>!sessionReady?<div className="loading">Loading your workspace…</div>:!user?<Empty title="A little closer to your next harvest" action={<button className="primary" onClick={signIn}>Sign in to continue <ArrowRight size={17}/></button>}>Sign in to access your farm, manage requests, and keep everything in one place.</Empty>:!roles.includes(user.role)?<Empty title="A workspace for every role" action={<a className="button secondary" href="#/marketplace">Back to marketplace</a>}>This page is for {roles.join(' or ').toLowerCase()} accounts. You are signed in as a {user.role.toLowerCase()}.</Empty>:content;
- return <><a className="skip-link" href="#main" onClick={e=>{e.preventDefault();main.current?.focus({preventScroll:true});main.current?.scrollIntoView();}}>Skip to content</a><div className="app-shell"><aside className={'sidebar '+(menu?'is-open':'')}><a href="#/marketplace" className="brand" aria-label="Wirefen home"><span className="brand-mark"><Sprout size={26}/></span>wirefen<span className="brand-dot">.</span></a><div className="workspace-label">Your growing network</div><nav aria-label="Main navigation">{nav.map(n=><a key={n.path} href={'#'+n.path} className={'nav-item '+(route===n.path?'active':'')} aria-current={route===n.path?'page':undefined}><n.icon size={19}/><span>{n.label}</span>{!!n.count&&<span className="nav-count">{n.count}</span>}</a>)}</nav><div className="sidebar-bottom"><div className="grow-note"><div className="grow-note-top"><Sprout size={24}/><span>Room to grow.</span></div><p>Your next connection starts with a good harvest.</p><a href={user?.role==='Farmer'?'#/new-listing':'#/help'}>{user?.role==='Farmer'?'List your produce':'How Wirefen works'}<ArrowUpRight size={16}/></a></div><a className={'nav-item '+(route==='/help'?'active':'')} href="#/help"><CircleHelp size={19}/>Help & support</a><div className="sidebar-utilities"><a className={'nav-item '+(route==='/settings'?'active':'')} href="#/settings"><Settings size={19}/>Settings</a><a className={'get-app-link '+(route==='/get-app'?'active':'')} href="#/get-app"><Download size={17}/>Get app</a></div><div className="sidebar-footer"><Leaf size={14}/> Growing better, together.</div></div></aside><div className="app-body"><header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Toggle navigation" aria-expanded={menu} onClick={()=>setMenu(!menu)}><Menu size={22}/></button><span>Workspace</span><ChevronRight size={14}/><strong>{current}</strong></div><div className="topbar-actions"><CurrencySelect fx={fx}/>{config.demo&&<span className="sample-tag">{PRESENTATION_MODE?'Presentation demo':'Sample workspace'}</span>}{user?<details className="profile-menu"><summary><span className="avatar">{user.name.split(' ').map(n=>n[0]).slice(0,2).join('')}</span><span className="profile-name">{user.name}<small>{user.role} account</small></span><ChevronDown size={15}/></summary><div className="profile-dropdown"><a href="#/settings">Account settings</a>{identity&&<button onClick={identity.manage}><ShieldCheck size={16}/>Sign-in & security</button>}<button onClick={logout}><LogOut size={16}/> Sign out</button></div></details>:<div className="auth-actions">{identity?.signedIn?<><a className="button secondary compact" href="#/onboarding">Finish account</a><button className="text-button" onClick={logout}>Sign out</button></>:<><button className="secondary compact" disabled={!!identity&&!identity.ready} onClick={signIn}>Sign in <ArrowRight size={16}/></button>{identity&&<button className="primary compact signup-button" disabled={!identity.ready} onClick={()=>identity.ready?identity.signUp():notify('Secure sign-up is still loading. Please try again shortly.')}>Create account</button>}</>}</div>}</div></header>{!online&&<div className="offline-banner" role="status"><WifiOff size={17}/>You're offline. Previously loaded produce is available, and farmer drafts stay on this device.</div>}<main id="main" ref={main} tabIndex={-1}>{['/marketplace','/saved','/farm'].includes(route)||route.startsWith('/produce/')?<CurrencyNotice fx={fx}/>:null}
- {route==='/get-app'?<GetApp pwa={pwa}/>:needsProfile?<Onboarding name={identity?.name||''} onComplete={u=>{setUser(u);writeLocal('wirefen-session',u);go(u.role==='Farmer'?'/farm':'/marketplace');notify('Your Wirefen account is ready.');}}/>:route==='/converter'?<CurrencyConverter fx={fx}/>:(route==='/marketplace'||route==='/saved')?<Marketplace key={route} savedOnly={route==='/saved'} saved={saved} toggleSave={toggleSave} money={money} user={user} config={config} signIn={signIn}/>:route.startsWith('/produce/')?<ProduceDetail id={route.split('/')[2]} user={user} money={money} saved={saved} toggleSave={toggleSave} signIn={signIn} notify={notify}/>:route==='/requests'?gate(['Buyer','Admin'],<Requests user={user!} notify={notify}/>):route==='/farm'?gate(['Farmer'],<Farm user={user!} money={money}/>):route.startsWith('/baseline')?gate(['Farmer','Admin'],<Baseline key={route+user?.id} farmerId={route.split('/')[2]||user?.farmer?.id||''} user={user!} online={online} currency={config.currency} notify={notify}/>):route.startsWith('/new-listing')?gate(['Farmer','Admin'],<NewListing key={route+user?.id} farmerId={route.split('/')[2]||user?.farmer?.id||''} user={user!} currency={config.currency} notify={notify}/>):route==='/verifications'?gate(['Agent','Admin'],<Verifications notify={notify}/>):route==='/admin'?gate(['Admin'],<Admin notify={notify} currency={config.currency}/>):route==='/settings'?gate(['Buyer','Farmer','Admin','Agent'],<>{identity&&<div className="security-settings"><div><strong>Sign-in & security</strong><p>Manage your email, password and connected accounts.</p></div><button className="secondary" onClick={identity.manage}><ShieldCheck size={17}/>Manage sign-in</button></div>}<SettingsPage user={user!} config={config} update={setUser} notify={notify}/></>):route==='/help'?<Help config={config}/>:<Empty title="This page hasn’t taken root" action={<a className="button primary" href="#/marketplace">Explore marketplace</a>}>The page may have moved. Find fresh produce in the marketplace.</Empty>}
- </main><footer className="page-footer"><span>© {new Date().getFullYear()} Wirefen</span><span>{config.demo?'Illustrative farms and listings · '+config.market:'Connecting farms. Growing possibilities.'}</span><a href="#/help">Need a hand?</a></footer></div></div><nav className="mobile-bottom-nav" aria-label="Mobile navigation"><a href="#/marketplace" aria-current={route==='/marketplace'?'page':undefined}><LayoutGrid size={20}/>Market</a><a href="#/saved" aria-current={route==='/saved'?'page':undefined}><Bookmark size={20}/>Saved</a><a href={user?.role==='Farmer'?'#/farm':user?.role==='Agent'?'#/verifications':'#/requests'} aria-current={route===(user?.role==='Farmer'?'/farm':user?.role==='Agent'?'/verifications':'/requests')?'page':undefined}>{user?.role==='Farmer'?<Tractor size={20}/>:user?.role==='Agent'?<ShieldCheck size={20}/>:<ClipboardList size={20}/>}{user?.role==='Farmer'?'Farm':user?.role==='Agent'?'Verifications':'Requests'}</a><a href="#/get-app" aria-current={route==='/get-app'?'page':undefined}><Download size={20}/>Get app</a></nav><InstallInvitation pwa={pwa}/><div className={'toast '+(notice?'visible':'')} role="status" aria-live="polite">{notice&&<><CheckCircle2 size={18}/>{notice}<button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={16}/></button></>}</div>{auth&&<AuthDialog config={config} close={()=>setAuth(false)} onLogin={u=>{setUser(u);writeLocal('wirefen-session',u);setAuth(false);notify(`Welcome, ${u.name.split(' ')[0]}.`);}}/>}</>;
+ return <><a className="skip-link" href="#main" onClick={e=>{e.preventDefault();main.current?.focus({preventScroll:true});main.current?.scrollIntoView();}}>Skip to content</a><div className="app-shell"><aside className={'sidebar '+(menu?'is-open':'')}><a href="#/marketplace" className="brand" aria-label="Wirefen home"><span className="brand-mark"><Sprout size={26}/></span>wirefen<span className="brand-dot">.</span></a><div className="workspace-label">Your growing network</div><nav aria-label="Main navigation">{nav.map(n=><a key={n.path} href={'#'+n.path} className={'nav-item '+(route===n.path?'active':'')} aria-current={route===n.path?'page':undefined}><n.icon size={19}/><span>{n.label}</span>{!!n.count&&<span className="nav-count">{n.count}</span>}</a>)}</nav><div className="sidebar-bottom"><button className="nav-item" style={{width:'100%',border:0,textAlign:'left',cursor:'pointer',background:'#e4ede0',color:'#214b35',marginBottom:10}} onClick={()=>setUssdOpen(true)}><Smartphone size={18}/><span>Dial *211# (USSD)</span></button><div className="grow-note"><div className="grow-note-top"><Sprout size={24}/><span>Room to grow.</span></div><p>Your next connection starts with a good harvest.</p><a href={user?.role==='Farmer'?'#/new-listing':'#/help'}>{user?.role==='Farmer'?'List your produce':'How Wirefen works'}<ArrowUpRight size={16}/></a></div><a className={'nav-item '+(route==='/help'?'active':'')} href="#/help"><CircleHelp size={19}/>Help & support</a><div className="sidebar-utilities"><a className={'nav-item '+(route==='/settings'?'active':'')} href="#/settings"><Settings size={19}/>Settings</a><a className={'get-app-link '+(route==='/get-app'?'active':'')} href="#/get-app"><Download size={17}/>Get app</a></div><div className="sidebar-footer"><Leaf size={14}/> Growing better, together.</div></div></aside><div className="app-body"><header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Toggle navigation" aria-expanded={menu} onClick={()=>setMenu(!menu)}><Menu size={22}/></button><span>Workspace</span><ChevronRight size={14}/><strong>{current}</strong></div><div className="topbar-actions"><button className="btn-ussd-dial" onClick={()=>setUssdOpen(true)} title="Simulate feature phone *211# USSD menu"><Smartphone size={15}/>Dial *211#</button><CurrencySelect fx={fx}/>{config.demo&&<span className="sample-tag">{PRESENTATION_MODE?'Presentation demo':'Sample workspace'}</span>}{user?<details className="profile-menu"><summary><span className="avatar">{user.name.split(' ').map(n=>n[0]).slice(0,2).join('')}</span><span className="profile-name">{user.name}<small>{user.role} account</small></span><ChevronDown size={15}/></summary><div className="profile-dropdown"><a href="#/settings">Account settings</a>{identity&&<button onClick={identity.manage}><ShieldCheck size={16}/>Sign-in & security</button>}<button onClick={logout}><LogOut size={16}/> Sign out</button></div></details>:<div className="auth-actions">{identity?.signedIn?<><a className="button secondary compact" href="#/onboarding">Finish account</a><button className="text-button" onClick={logout}>Sign out</button></>:<><button className="secondary compact" disabled={!!identity&&!identity.ready} onClick={signIn}>Sign in <ArrowRight size={16}/></button>{identity&&<button className="primary compact signup-button" disabled={!identity.ready} onClick={()=>identity.ready?identity.signUp():notify('Secure sign-up is still loading. Please try again shortly.')}>Create account</button>}</>}</div>}</div></header>{!online&&<div className="offline-banner" role="status"><WifiOff size={17}/>You're offline. Previously loaded produce is available, and farmer drafts stay on this device.</div>}<main id="main" ref={main} tabIndex={-1}>{['/marketplace','/saved','/farm'].includes(route)||route.startsWith('/produce/')?<CurrencyNotice fx={fx}/>:null}
+ {route==='/get-app'?<GetApp pwa={pwa}/>:needsProfile?<Onboarding name={identity?.name||''} onComplete={u=>{setUser(u);writeLocal('wirefen-session',u);go(u.role==='Farmer'?'/farm':'/marketplace');notify('Your Wirefen account is ready.');}}/>:route==='/converter'?<CurrencyConverter fx={fx}/>:(route==='/marketplace'||route==='/saved')?<Marketplace key={route} savedOnly={route==='/saved'} saved={saved} toggleSave={toggleSave} money={money} user={user} config={config} signIn={signIn}/>:route.startsWith('/produce/')?<ProduceDetail id={route.split('/')[2]} user={user} money={money} saved={saved} toggleSave={toggleSave} signIn={signIn} notify={notify}/>:route==='/requests'?gate(['Buyer','Admin'],<Requests user={user!} notify={notify}/>):route==='/farm'?gate(['Farmer'],<Farm user={user!} money={money}/>):route.startsWith('/baseline')?gate(['Farmer','Admin'],<Baseline key={route+user?.id} farmerId={route.split('/')[2]||user?.farmer?.id||''} user={user!} online={online} currency={config.currency} notify={notify}/>):route.startsWith('/new-listing')?gate(['Farmer','Admin'],<NewListing key={route+user?.id} farmerId={route.split('/')[2]||user?.farmer?.id||''} user={user!} currency={config.currency} notify={notify}/>):route==='/verifications'?gate(['Agent','Admin'],<Verifications notify={notify}/>):route==='/admin'?gate(['Admin'],<Admin notify={notify} currency={config.currency}/>):route==='/settings'?gate(['Buyer','Farmer','Admin','Agent'],<>{identity&&<div className="security-settings"><div><strong>Sign-in & security</strong><p>Manage your email, password and connected accounts.</p></div><button className="secondary" onClick={identity.manage}><ShieldCheck size={17}/>Manage sign-in</button></div>}<SettingsPage user={user!} config={config} update={setUser} notify={notify}/></>):route==='/help'?<Help config={config} onOpenUssd={()=>setUssdOpen(true)}/>:<Empty title="This page hasn’t taken root" action={<a className="button primary" href="#/marketplace">Explore marketplace</a>}>The page may have moved. Find fresh produce in the marketplace.</Empty>}
+ </main><footer className="page-footer"><span>© {new Date().getFullYear()} Wirefen</span><span>{config.demo?'Illustrative farms and listings · '+config.market:'Connecting farms. Growing possibilities.'}</span><a href="#/help">Need a hand?</a></footer></div></div><nav className="mobile-bottom-nav" aria-label="Mobile navigation"><a href="#/marketplace" aria-current={route==='/marketplace'?'page':undefined}><LayoutGrid size={20}/>Market</a><a href="#/saved" aria-current={route==='/saved'?'page':undefined}><Bookmark size={20}/>Saved</a><a href={user?.role==='Farmer'?'#/farm':user?.role==='Agent'?'#/verifications':'#/requests'} aria-current={route===(user?.role==='Farmer'?'/farm':user?.role==='Agent'?'/verifications':'/requests')?'page':undefined}>{user?.role==='Farmer'?<Tractor size={20}/>:user?.role==='Agent'?<ShieldCheck size={20}/>:<ClipboardList size={20}/>}{user?.role==='Farmer'?'Farm':user?.role==='Agent'?'Verifications':'Requests'}</a><a href="#/get-app" aria-current={route==='/get-app'?'page':undefined}><Download size={20}/>Get app</a></nav><InstallInvitation pwa={pwa}/><div className={'toast '+(notice?'visible':'')} role="status" aria-live="polite">{notice&&<><CheckCircle2 size={18}/>{notice}<button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={16}/></button></>}</div>{auth&&<AuthDialog config={config} close={()=>setAuth(false)} onLogin={u=>{setUser(u);writeLocal('wirefen-session',u);setAuth(false);notify(`Welcome, ${u.name.split(' ')[0]}.`);}}/>}{ussdOpen&&<UssdSimulatorModal close={()=>setUssdOpen(false)}/>}</>;
 }
 
 function Marketplace({savedOnly,saved,toggleSave,money,user,config,signIn}:{savedOnly:boolean;saved:string[];toggleSave:(id:string)=>void;money:(n:number)=>string;user:User|null;config:Config;signIn:()=>void}){
@@ -60,7 +60,258 @@ function AuthDialog({config,close,onLogin}:{config:Config;close:()=>void;onLogin
  return <dialog ref={dialog} className="auth-dialog" onCancel={close} aria-labelledby="auth-title"><button className="dialog-close icon-button" aria-label="Close sign in" onClick={close}><X size={22}/></button><div className="auth-brand"><Sprout size={28}/></div><h2 id="auth-title">{register?'Let’s grow together.':'Welcome to Wirefen.'}</h2><p>{register?'A new connection starts here.':'Your farm-to-market network, all in one place.'}</p><ErrorBox error={error}/><form onSubmit={submit}>{register&&<><div className="segmented">{['Buyer','Farmer','Agent'].map(r=><button key={r} type="button" aria-pressed={role===r} className={role===r?'selected':''} onClick={()=>setRole(r)}>{r==='Buyer'?'I’m buying':r==='Farmer'?'I’m growing':'Field Agent'}</button>)}</div><Field label="Full name"><input name="name" required minLength={2} maxLength={100} autoComplete="name"/></Field></>}<Field label="Phone number" hint="Include your country code, for example +27821234567."><input name="phone" type="tel" required pattern="\+[1-9][0-9]{7,14}" autoComplete="tel" placeholder="+27"/></Field><Field label="Password" hint={register?'Use at least 10 characters.':undefined}><input name="password" type="password" required minLength={register?10:1} maxLength={128} autoComplete={register?'new-password':'current-password'}/></Field>{register&&role==='Farmer'&&<><Field label="Farm name"><input name="farm_name" required maxLength={100} placeholder="e.g. Mokoena Family Farm"/></Field><div className="form-grid"><Field label="Country" hint="Standardized country"><input name="country" required maxLength={100} defaultValue="South Africa"/></Field><Field label="District / Region" hint="District or province"><input name="region" required maxLength={100} placeholder="e.g. Capricorn District"/></Field></div><Field label="Locality / Ward" hint="Local ward or community zone"><input name="locality" required maxLength={100} placeholder="e.g. Polokwane Ward 12"/></Field></>}{register&&<label className="checkbox-label consent"><input type="checkbox" name="sms"/>I agree to receive Wirefen SMS updates. I can opt out at any time.</label>}<button className="primary full-width" disabled={busy}>{busy?'Please wait…':register?'Create account':'Sign in'}<ArrowRight size={17}/></button></form><button className="text-button auth-switch" onClick={()=>{setRegister(!register);setError('');}}>{register?'Already have an account? Sign in':'New to Wirefen? Create an account'}</button>{config.demo&&<div className="demo-accounts"><span>Explore with sample data</span><div>{['Buyer','Farmer','Agent','Admin'].map(r=><button key={r} className="secondary" disabled={busy} onClick={()=>demo(r)}>{r}</button>)}</div><small>Demo access is disabled in production.</small></div>}</dialog>;
 }
 
-function Requests({user,notify}:{user:User;notify:(s:string)=>void}){const [orders,setOrders]=useState<Order[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);const load=()=>{setLoading(true);api<Order[]>('/orders').then(setOrders).catch(e=>setError(e.message)).finally(()=>setLoading(false));};useEffect(load,[]);async function update(id:string,status:string){try{await send('/orders/'+id,{status},'PATCH');setOrders(orders.map(o=>o.id===id?{...o,status}:o));notify('Request status updated.');}catch(e){setError((e as Error).message);}}return <><div className="page-heading"><div><h1>{user.role==='Admin'?'Order request queue':'Your order requests'}</h1><p>{user.role==='Admin'?'Connect buyers with the right growers.':'From a good find to your next delivery.'}</p></div><button className="secondary" onClick={load}><RefreshCw size={16}/>Refresh</button></div><ErrorBox error={error}/>{loading?<div className="loading">Loading requests…</div>:orders.length?<div className="table-wrap"><table><thead><tr><th>Produce / request</th>{user.role==='Admin'&&<th>Buyer</th>}<th>Quantity</th><th>Location & notes</th><th>Submitted</th><th>Status</th></tr></thead><tbody>{orders.map(o=><tr key={o.id}><td><a className="table-title" href={'#/produce/'+o.listing_id}>{o.title}</a><small>#{o.id.slice(0,8)}</small></td>{user.role==='Admin'&&<td>{o.buyer_name}<small>{o.phone}</small></td>}<td>{number(o.volume)} kg</td><td>{o.delivery_location}{o.notes&&<small>{o.notes}</small>}</td><td>{new Date(o.created_at).toLocaleDateString('en-GB')}</td><td>{user.role==='Admin'?<select aria-label={'Status for '+o.title} value={o.status} onChange={e=>update(o.id,e.target.value)}>{['New','In review','Contacted','Closed'].map(s=><option key={s}>{s}</option>)}</select>:<span className={'status status-'+o.status.toLowerCase().replace(' ','-')}>{o.status}</span>}</td></tr>)}</tbody></table></div>:<Empty title="Your next connection starts here" action={<a className="button primary" href="#/marketplace">Explore produce <ArrowRight size={16}/></a>}>Send an inquiry on any produce listing. You can follow its progress here.</Empty>}<p className="footnote">Requests are inquiries. Availability, delivery, and payment terms are confirmed separately by the Wirefen team.</p></>;}
+function PaymentModal({order,close,onSuccess,notify}:{order:Order;close:()=>void;onSuccess:(p:Payment)=>void;notify:(s:string)=>void}){
+ const dialog=useRef<HTMLDialogElement>(null);
+ const [currency,setCurrency]=useState<string>(order.currency||'MWK');
+ const [method,setMethod]=useState<'malawian_bank'|'airtel_money_mw'|'tnm_mpamba'|'zambian_momo'>('malawian_bank');
+ const [bankName,setBankName]=useState('National Bank of Malawi');
+ const [accountOrPhone,setAccountOrPhone]=useState('');
+ const [amount,setAmount]=useState<string>(()=>{
+  const basePerKg=currency==='MWK'?1500:currency==='ZMW'?25:currency==='USD'?0.8:12.5;
+  return String(Math.round(order.volume*basePerKg));
+ });
+ const [busy,setBusy]=useState(false);
+ const [error,setError]=useState('');
+
+ useEffect(()=>{dialog.current?.showModal();return()=>dialog.current?.close();},[]);
+
+ const handleCurrencyChange=(newCur:string)=>{
+  setCurrency(newCur);
+  const basePerKg=newCur==='MWK'?1500:newCur==='ZMW'?25:newCur==='USD'?0.8:12.5;
+  setAmount(String(Math.round(order.volume*basePerKg)));
+ };
+
+ async function submit(e:FormEvent<HTMLFormElement>){
+  e.preventDefault();
+  setBusy(true);
+  setError('');
+  try{
+   const provider=method==='malawian_bank'?`${bankName} (Direct Debit)`:method==='airtel_money_mw'?'Airtel Money Malawi':method==='tnm_mpamba'?'TNM Mpamba':'Zambian Mobile Money';
+   const res=await send<Payment>('/payments',{order_id:order.id,amount:Number(amount),currency,method,provider,bank_name:method==='malawian_bank'?bankName:undefined,account_or_phone:accountOrPhone});
+   notify(`Direct payment of ${currency} ${Number(amount).toLocaleString()} confirmed.`);
+   onSuccess(res);
+  }catch(err){
+   setError((err as Error).message);
+  }finally{
+   setBusy(false);
+  }
+ }
+
+ return (
+  <dialog ref={dialog} className="payment-dialog" onCancel={close} aria-labelledby="pay-title">
+   <button className="dialog-close icon-button" aria-label="Close" onClick={close}><X size={20}/></button>
+   <div className="auth-brand" style={{background:'#e3f2dc',color:'#234c36'}}><CreditCard size={26}/></div>
+   <h2 id="pay-title">Direct Order Payment</h2>
+   <p>Direct settlement for buyers in Malawi and Zambia using local bank accounts or mobile money.</p>
+   <div className="payment-order-summary">
+    <div className="summary-row"><span>Produce requested:</span><strong>{order.title}</strong></div>
+    <div className="summary-row"><span>Quantity:</span><strong>{number(order.volume)} kg</strong></div>
+    <div className="summary-row"><span>Delivery to:</span><span>{order.delivery_location}</span></div>
+    <div className="summary-row summary-total"><span>Payable amount:</span><strong>{currency} {Number(amount||0).toLocaleString()}</strong></div>
+   </div>
+   <ErrorBox error={error}/>
+   <form onSubmit={submit}>
+    <div className="form-grid">
+     <Field label="Settlement Currency">
+      <select value={currency} onChange={e=>handleCurrencyChange(e.target.value)}>
+       <option value="MWK">Malawian Kwacha (MWK MK)</option>
+       <option value="ZMW">Zambian Kwacha (ZMW ZK)</option>
+       <option value="ZAR">South African Rand (ZAR R)</option>
+       <option value="USD">US Dollar (USD $)</option>
+       <option value="EUR">Euro (EUR €)</option>
+      </select>
+     </Field>
+     <Field label="Amount to Settle">
+      <input type="number" required min="1" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}/>
+     </Field>
+    </div>
+    <Field label="Select Payment Channel">
+     <div className="payment-methods-grid">
+      <div className={`method-card ${method==='malawian_bank'?'selected':''}`} onClick={()=>setMethod('malawian_bank')}>
+       <strong><Building2 size={16}/> Malawian Bank Account</strong>
+       <small>National Bank, Standard Bank, FDH, NBS, Ecobank</small>
+      </div>
+      <div className={`method-card ${method==='airtel_money_mw'?'selected':''}`} onClick={()=>setMethod('airtel_money_mw')}>
+       <strong><Smartphone size={16}/> Airtel Money (Malawi)</strong>
+       <small>Push USSD prompt to phone</small>
+      </div>
+      <div className={`method-card ${method==='tnm_mpamba'?'selected':''}`} onClick={()=>setMethod('tnm_mpamba')}>
+       <strong><Smartphone size={16}/> TNM Mpamba</strong>
+       <small>Instant Mpamba wallet debit</small>
+      </div>
+      <div className={`method-card ${method==='zambian_momo'?'selected':''}`} onClick={()=>setMethod('zambian_momo')}>
+       <strong><Smartphone size={16}/> Zambian Mobile Money</strong>
+       <small>MTN, Airtel Zambia, Zamtel</small>
+      </div>
+     </div>
+    </Field>
+    {method==='malawian_bank'&&(<>
+     <Field label="Malawian Bank" hint="Select your bank">
+      <select value={bankName} onChange={e=>setBankName(e.target.value)}>
+       <option value="National Bank of Malawi">National Bank of Malawi (Mo626 / Direct)</option>
+       <option value="Standard Bank Malawi">Standard Bank Malawi</option>
+       <option value="FDH Bank">FDH Bank</option>
+       <option value="NBS Bank">NBS Bank</option>
+       <option value="Ecobank Malawi">Ecobank Malawi</option>
+       <option value="Centenary Bank">Centenary Bank (Malawi)</option>
+      </select>
+     </Field>
+     <Field label="Bank Account / Debit Card Number" hint="Your account number or debit card">
+      <input required placeholder="e.g. 1004589234 or card number" value={accountOrPhone} onChange={e=>setAccountOrPhone(e.target.value)}/>
+     </Field>
+    </>)}
+    {(method==='airtel_money_mw'||method==='tnm_mpamba'||method==='zambian_momo')&&(
+     <Field label="Mobile Wallet Phone Number" hint={method==='airtel_money_mw'?'e.g. +265991234567 (Airtel)':method==='tnm_mpamba'?'e.g. +265881234567 (TNM)':'e.g. +260971234567 (Zambia)'}>
+      <input required type="tel" placeholder="+265..." value={accountOrPhone} onChange={e=>setAccountOrPhone(e.target.value)}/>
+     </Field>
+    )}
+    <button className="primary full-width" disabled={busy} style={{marginTop:16}}>{busy?'Authorizing settlement…':`Pay ${currency} ${Number(amount||0).toLocaleString()} Now`}<ArrowRight size={16}/></button>
+   </form>
+  </dialog>
+ );
+}
+
+function ReceiptModal({payment,close}:{payment:Payment;close:()=>void}){
+ const dialog=useRef<HTMLDialogElement>(null);
+ useEffect(()=>{dialog.current?.showModal();return()=>dialog.current?.close();},[]);
+ return (
+  <dialog ref={dialog} className="payment-dialog" onCancel={close}>
+   <button className="dialog-close icon-button" onClick={close}><X size={20}/></button>
+   <div className="receipt-card">
+    <div className="receipt-badge"><Check size={28}/></div>
+    <h3>Payment Successful!</h3>
+    <p className="muted">Receipt Reference: <strong>{payment.reference}</strong></p>
+    <div className="receipt-details">
+     <div className="row"><span>Status:</span><strong style={{color:'#2c5b20'}}>COMPLETED</strong></div>
+     <div className="row"><span>Amount Settled:</span><strong>{payment.currency} {payment.amount.toLocaleString()}</strong></div>
+     <div className="row"><span>Method / Channel:</span><span>{payment.provider} {payment.bank_name?`(${payment.bank_name})`:''}</span></div>
+     <div className="row"><span>Account / Phone:</span><span>{payment.account_or_phone}</span></div>
+     <div className="row"><span>Date & Time:</span><span>{new Date(payment.created_at).toLocaleString('en-GB')}</span></div>
+    </div>
+   </div>
+   <button className="secondary full-width" onClick={close}>Done / Close</button>
+  </dialog>
+ );
+}
+
+export function UssdSimulatorModal({close}:{close:()=>void}){
+ const dialog=useRef<HTMLDialogElement>(null);
+ const [phone,setPhone]=useState('+265991234567');
+ const [screenText,setScreenText]=useState('DIAL *211# TO ACCESS WIREFEN OFFLINE SERVICES');
+ const [inputVal,setInputVal]=useState('*211#');
+ const [history,setHistory]=useState<string[]>([]);
+ const [activeSession,setActiveSession]=useState(false);
+ const [loading,setLoading]=useState(false);
+
+ useEffect(()=>{dialog.current?.showModal();return()=>dialog.current?.close();},[]);
+
+ async function dialOrSend(overrideText?:string){
+  const textToSend=overrideText!==undefined?overrideText:inputVal.trim();
+  setLoading(true);
+  try{
+   let combined=textToSend;
+   if(activeSession&&textToSend!=='*211#')combined=[...history,textToSend].join('*');
+   else setHistory([]);
+   const res=await send<UssdSimulateResult>('/ussd/simulate',{phoneNumber:phone,text:combined,serviceCode:'*211#'});
+   setScreenText(res.menuText);
+   setInputVal('');
+   if(res.isEnd){
+    setActiveSession(false);
+    setHistory([]);
+   }else{
+    setActiveSession(true);
+    if(textToSend!=='*211#')setHistory(h=>[...h,textToSend]);
+   }
+  }catch(err){
+   setScreenText('Connection error. Dial *211# to retry.');
+   setActiveSession(false);
+  }finally{
+   setLoading(false);
+  }
+ }
+
+ function handleEnd(){
+  setActiveSession(false);
+  setHistory([]);
+  setScreenText('Call Ended.\nDial *211# to start again.');
+  setInputVal('*211#');
+ }
+
+ return (
+  <dialog ref={dialog} className="ussd-modal" onCancel={close}>
+   <div className="phone-case">
+    <button className="dialog-close icon-button" style={{color:'#99a89c'}} onClick={close}><X size={18}/></button>
+    <div className="phone-speaker"/>
+    <div className="phone-screen">
+     <div className="phone-screen-bar">
+      <span>▲▲▲▲▲ Airtel MW</span>
+      <span>{activeSession?'ACTIVE USSD':'STANDBY'}</span>
+     </div>
+     <div className="phone-screen-text">{loading?'Connecting…':screenText}</div>
+     <div className="phone-input-bar">
+      <input className="phone-input" value={inputVal} placeholder={activeSession?'Option (e.g. 1)':'*211#'} onChange={e=>setInputVal(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')dialOrSend();}}/>
+     </div>
+    </div>
+    <div className="phone-keypad">
+     {['1','2','3','4','5','6','7','8','9','*','0','#'].map(k=>(
+      <button key={k} className="keypad-btn" type="button" onClick={()=>setInputVal(v=>v+k)}>{k}</button>
+     ))}
+     <button className="keypad-btn keypad-call" type="button" onClick={()=>dialOrSend()}>{activeSession?'Send':'Dial *211#'}</button>
+     <button className="keypad-btn" type="button" onClick={()=>setInputVal(v=>v.slice(0,-1))}>Del</button>
+     <button className="keypad-btn keypad-end" type="button" onClick={handleEnd}>End</button>
+    </div>
+    <div className="ussd-quick-chips">
+     <span style={{fontSize:11,color:'#859688',width:'100%',marginBottom:2}}>Quick test scenarios:</span>
+     <button type="button" className="ussd-chip" onClick={()=>{setInputVal('*211#');dialOrSend('*211#');}}>Dial *211#</button>
+     <button type="button" className="ussd-chip" onClick={()=>dialOrSend('3')}>Check Prices</button>
+     <button type="button" className="ussd-chip" onClick={()=>dialOrSend('1*Chisomo Phiri*1*Kasungu*Chulu')}>Fast Farmer Signup</button>
+    </div>
+   </div>
+  </dialog>
+ );
+}
+
+function Requests({user,notify}:{user:User;notify:(s:string)=>void}){
+ const [orders,setOrders]=useState<Order[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);
+ const [payingOrder,setPayingOrder]=useState<Order|null>(null);
+ const [receipt,setReceipt]=useState<Payment|null>(null);
+ const load=()=>{setLoading(true);api<Order[]>('/orders').then(setOrders).catch(e=>setError(e.message)).finally(()=>setLoading(false));};
+ useEffect(load,[]);
+ async function update(id:string,status:string){try{await send('/orders/'+id,{status},'PATCH');setOrders(orders.map(o=>o.id===id?{...o,status}:o));notify('Request status updated.');}catch(e){setError((e as Error).message);}}
+ return <>
+  <div className="page-heading">
+   <div>
+    <h1>{user.role==='Admin'?'Order request queue':'Your order requests'}</h1>
+    <p>{user.role==='Admin'?'Connect buyers with the right growers and verify payments.':'From a good find to your next delivery with direct settlement.'}</p>
+   </div>
+   <button className="secondary" onClick={load}><RefreshCw size={16}/>Refresh</button>
+  </div>
+  <ErrorBox error={error}/>
+  {loading?<div className="loading">Loading requests…</div>:orders.length?<div className="table-wrap"><table>
+   <thead><tr>
+    <th>Produce / request</th>
+    {user.role==='Admin'&&<th>Buyer</th>}
+    <th>Quantity</th>
+    <th>Location & notes</th>
+    <th>Submitted</th>
+    <th>Status</th>
+    <th>Payment</th>
+   </tr></thead>
+   <tbody>{orders.map(o=><tr key={o.id}>
+    <td><a className="table-title" href={'#/produce/'+o.listing_id}>{o.title}</a><small>#{o.id.slice(0,8)}</small></td>
+    {user.role==='Admin'&&<td>{o.buyer_name}<small>{o.phone}</small></td>}
+    <td>{number(o.volume)} kg</td>
+    <td>{o.delivery_location}{o.notes&&<small>{o.notes}</small>}</td>
+    <td>{new Date(o.created_at).toLocaleDateString('en-GB')}</td>
+    <td>{user.role==='Admin'?<select aria-label={'Status for '+o.title} value={o.status} onChange={e=>update(o.id,e.target.value)}>{['New','In review','Contacted','Closed'].map(s=><option key={s}>{s}</option>)}</select>:<span className={'status status-'+o.status.toLowerCase().replace(' ','-')}>{o.status}</span>}</td>
+    <td>{o.payment_status==='paid'?<span className="status status-paid"><Check size={12}/> Paid ({o.currency||'MWK'} {o.amount_paid?number(o.amount_paid):''})<small>{o.payment_ref}</small></span>:user.role==='Buyer'?<button className="button primary compact" onClick={()=>setPayingOrder(o)}><CreditCard size={13}/> Pay Direct</button>:<span className="status status-new">Unpaid</span>}</td>
+   </tr>)}</tbody>
+  </table></div>:<Empty title="Your next connection starts here" action={<a className="button primary" href="#/marketplace">Explore produce <ArrowRight size={16}/></a>}>Send an inquiry on any produce listing. You can follow its progress here.</Empty>}
+  <p className="footnote"><CreditCard size={15}/> Direct payments supported via Malawian Bank Accounts (National Bank of Malawi, Standard Bank, FDH, NBS, Ecobank), Airtel Money, and TNM Mpamba in Malawian Kwacha (MWK) and Zambian Kwacha (ZMW).</p>
+  {payingOrder&&<PaymentModal order={payingOrder} close={()=>setPayingOrder(null)} onSuccess={p=>{setPayingOrder(null);setReceipt(p);setOrders(orders.map(o=>o.id===p.order_id?{...o,payment_status:'paid',payment_ref:p.reference,payment_method:p.provider,amount_paid:p.amount,currency:p.currency,status:o.status==='New'?'In review':o.status}:o));}} notify={notify}/>}
+  {receipt&&<ReceiptModal payment={receipt} close={()=>setReceipt(null)}/>}
+ </>;
+}
 
 function Farm({user,money}:{user:User;money:(v:number)=>string}){const [listings,setListings]=useState<Listing[]>([]),[error,setError]=useState('');useEffect(()=>{api<Listing[]>('/listings?mine=true').then(setListings).catch(e=>setError(e.message));},[]);return <><div className="page-heading"><div><h1>{user.farmer?.farm_name}</h1><p><MapPin size={15}/>{user.farmer?.location} · {user.farmer?.verification_status}</p></div><a className="button primary" href="#/new-listing"><Plus size={17}/>List produce</a></div><section className="farm-baseline-banner"><div className="farm-avatar"><Sprout size={30}/></div><div><h2>A little history. A stronger future.</h2><p>Record your usual yield, growing time and production costs. Save as you go.</p></div><a className="button secondary" href="#/baseline">Your growing history <ArrowRight size={16}/></a></section><div className="catalog-heading"><h2>Your produce listings</h2><span>{listings.length} listings</span></div><ErrorBox error={error}/>{listings.length?<div className="table-wrap"><table><thead><tr><th>Produce</th><th>Volume</th><th>Price / kg</th><th>Harvest</th><th>Available until</th><th>Listing</th></tr></thead><tbody>{listings.map(l=><tr key={l.id}><td className="table-product"><img src={l.image} alt=""/><div><strong>{l.title}</strong><small>{l.crop_category}</small></div></td><td>{number(l.available_volume)} kg</td><td>{money(l.price)}</td><td>{date(l.harvest_date)}</td><td>{date(l.expiration_date)}</td><td><a className="text-button" href={'#/produce/'+l.id}>View <ArrowUpRight size={15}/></a></td></tr>)}</tbody></table></div>:<Empty title="Let’s get your harvest out there" action={<a className="button primary" href="#/new-listing">Create your first listing</a>}>Your published produce will appear here.</Empty>}</>;}
 
@@ -142,4 +393,4 @@ function Verifications({notify}:{notify:(s:string)=>void}){
 }
 
 function SettingsPage({user,config,update,notify}:{user:User;config:Config;update:(u:User)=>void;notify:(s:string)=>void}){const [busy,setBusy]=useState(false),[error,setError]=useState('');async function consent(value:boolean){setBusy(true);try{await send('/account/consent',{sms_opt_in:value},'PATCH');update({...user,sms_opt_in:value});notify(value?'SMS consent recorded.':'SMS consent withdrawn.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}return <><div className="page-heading"><div><h1>Your account, your preferences.</h1><p>Manage how you stay connected to Wirefen.</p></div></div><div className="settings-layout"><section className="settings-section"><h2>Account details</h2><dl className="review-list"><div><dt>Name</dt><dd>{user.name}</dd></div>{user.email&&<div><dt>Email</dt><dd>{user.email}</dd></div>}<div><dt>Phone</dt><dd>{user.phone}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div></dl><p className="muted">Your phone number connects your account and future SMS interactions.</p></section><section className="settings-section"><h2>SMS updates</h2><p>Receive Wirefen updates and use supported SMS data entry. You can withdraw consent here or reply STOP at any time.</p><ErrorBox error={error}/><label className="checkbox-label"><input type="checkbox" checked={user.sms_opt_in} disabled={busy} onChange={e=>consent(e.target.checked)}/>I agree to receive Wirefen SMS messages.</label><p className="info-box">{config.sms_ready?'SMS provider credentials are configured.':'SMS delivery is not connected yet. Your preference is recorded for when the service is activated.'}</p></section></div></>;}
-function Help({config}:{config:Config}){return <><div className="page-heading"><div><h1>Good connections start with clarity.</h1><p>A few things to know about growing with Wirefen.</p></div></div><div className="help-layout"><section><h2>From farm to marketplace</h2>{[['How do I buy produce?','Explore the marketplace, filter by crop or volume, and open a listing. Sign in as a buyer to submit an order request. The Wirefen team reviews inquiries and helps coordinate next steps. No payment is taken on this platform.'],['How do I list my harvest?','Create a farmer account. In My farm, choose List produce, enter availability, price and harvest details, then publish. Your listing appears in the public catalogue until its expiration date.'],['What is growing history (Form 0)?','Your historical baseline describes a typical season: primary crop, land planted, yield per acre, growing duration and production costs. Estimates are welcome. It helps establish a foundation for future supply planning.'],['What happens when I lose connection?','After your first online visit, the installed app caches its shell and catalogue. Growing history drafts are kept on your device and sync when connectivity returns. Keep using the same browser and account; clearing browser storage removes local drafts. Publishing listings and submitting orders require a connection.'],['How does SMS work?','Phase 1 prepares SMS connectivity and consent records. Once a provider is configured, opted-in farmers can text BASELINE to save average yield into a draft. Full conversational onboarding is planned for a later phase. Reply STOP to opt out.'],['How does admin assistance work?','Authorized staff use the farmer directory to select a Farmer ID and enter growing history or produce listings on that farmer’s behalf. Order inquiries are managed in the admin request queue.']].map(([title,body])=><details className="faq" key={title}><summary>{title}<Plus size={17}/></summary><p>{body}</p></details>)}</section><aside className="help-note"><Sprout size={32}/><h2>Built for the way you grow.</h2><p>Start small. Save as you go. Return when you’re ready.</p><a className="button primary" href="#/marketplace">Explore the marketplace <ArrowRight size={16}/></a>{config.demo&&<small>This workspace contains illustrative farms and listings. Market and currency are configurable before launch.</small>}</aside></div></>;}
+function Help({config,onOpenUssd}:{config:Config;onOpenUssd?:()=>void}){return <><div className="page-heading"><div><h1>Good connections start with clarity.</h1><p>A few things to know about growing with Wirefen in Malawi, Zambia, and regional markets.</p></div></div><div className="help-layout"><section><h2>From farm to marketplace</h2>{[['How do I buy produce and make direct payments?','Explore the marketplace, filter by crop or volume, and open a listing. Sign in as a buyer to submit an order request. Buyers can make direct payments in Malawian Kwacha (MWK), Zambian Kwacha (ZMW) or ZAR using local bank accounts, Airtel Money, or TNM Mpamba.'],['Can I pay directly with a Malawian bank account?','Yes! Wirefen supports direct settlement for Malawian bank accounts (National Bank of Malawi Mo626, Standard Bank Malawi, FDH Bank, NBS Bank, Ecobank, Centenary Bank), Airtel Money Malawi, and TNM Mpamba in Malawian Kwacha (MWK). Buyers receive a digital receipt and transaction reference immediately.'],['How do farmers without internet access Wirefen via USSD (*211#)?','Smallholder farmers across rural Malawi and Zambia can dial *211# on any basic 2G/feature phone without internet. The interactive USSD menu enables farmer registration, buyer registration, live market price checking in MWK/ZMW, and Form 1 operational cost tracking.'],['Can farmers register via regular SMS in parallel?','Yes! In parallel to the website and USSD, farmers can register via SMS by texting: JOIN FARMER <Name>, <Country>, <District>, <Locality> to Wirefen. Their account and farm profile are created immediately.'],['How do I list my harvest?','Create a farmer account. In My farm, choose List produce, enter availability, price and harvest details, then publish. Your listing appears in the public catalogue until its expiration date.'],['What is growing history (Form 0 & Form 1)?','Your historical baseline describes a typical season: primary crop, land planted, yield per acre, growing duration and Form 1 Guided Breakdown costs (fertilizer/seeds, labor, processing, transportation). Estimates are welcome and help establish a foundation for supply planning.'],['What happens when I lose connection?','After your first online visit, the installed app caches its shell and catalogue. Growing history drafts are kept on your device and sync when connectivity returns. Keep using the same browser and account; clearing browser storage removes local drafts.'],['How does admin assistance work?','Authorized staff use the farmer directory to select a Farmer ID and enter growing history or produce listings on that farmer’s behalf. Order inquiries and payments are managed in the admin request queue.']].map(([title,body])=><details className="faq" key={title}><summary>{title}<Plus size={17}/></summary><p>{body}</p></details>)}</section><aside className="help-note"><Sprout size={32}/><h2>Built for the way you grow.</h2><p>Start small. Save as you go. Return when you’re ready.</p><a className="button primary" href="#/marketplace">Explore the marketplace <ArrowRight size={16}/></a>{onOpenUssd&&<button className="button secondary full-width" style={{marginTop:12}} onClick={onOpenUssd}><Smartphone size={16}/>Launch *211# Phone Simulator</button>}{config.demo&&<small>This workspace contains illustrative farms and listings. Malawian Kwacha (MWK), Zambian Kwacha (ZMW), ZAR, USD, and EUR are active currencies.</small>}</aside></div></>;}

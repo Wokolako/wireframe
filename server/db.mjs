@@ -31,8 +31,12 @@ CREATE TABLE IF NOT EXISTS sms_consents (id TEXT PRIMARY KEY, user_id TEXT NOT N
 CREATE TABLE IF NOT EXISTS conversational_state (user_phone TEXT PRIMARY KEY REFERENCES users(phone), current_form_id TEXT, last_question_asked TEXT, timestamp TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sms_messages (message_sid TEXT PRIMARY KEY, received_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS listing_drafts (farmer_id TEXT PRIMARY KEY REFERENCES farmer_profiles(id), payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS payments (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES order_requests(id), buyer_id TEXT NOT NULL REFERENCES users(id), amount REAL NOT NULL, currency TEXT NOT NULL, method TEXT NOT NULL, provider TEXT NOT NULL, account_or_phone TEXT NOT NULL, bank_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'completed', reference TEXT NOT NULL UNIQUE, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ussd_sessions (session_id TEXT PRIMARY KEY, phone_number TEXT NOT NULL, step TEXT NOT NULL DEFAULT 'welcome', data TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS listings_category_idx ON listings(crop_category,harvest_date);
 CREATE INDEX IF NOT EXISTS orders_buyer_idx ON order_requests(buyer_id);
+CREATE INDEX IF NOT EXISTS payments_order_idx ON payments(order_id);
+CREATE INDEX IF NOT EXISTS payments_buyer_idx ON payments(buyer_id);
 `);
   for (const col of [
     'ALTER TABLE farmer_profiles ADD COLUMN country TEXT NOT NULL DEFAULT ""',
@@ -45,7 +49,12 @@ CREATE INDEX IF NOT EXISTS orders_buyer_idx ON order_requests(buyer_id);
     'ALTER TABLE historical_baselines ADD COLUMN cost_processing REAL',
     'ALTER TABLE historical_baselines ADD COLUMN cost_transportation REAL',
     'ALTER TABLE listings ADD COLUMN traceability TEXT NOT NULL DEFAULT ""',
-    'ALTER TABLE listings ADD COLUMN agent_score REAL NOT NULL DEFAULT 0'
+    'ALTER TABLE listings ADD COLUMN agent_score REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE order_requests ADD COLUMN payment_status TEXT NOT NULL DEFAULT "unpaid"',
+    'ALTER TABLE order_requests ADD COLUMN payment_ref TEXT',
+    'ALTER TABLE order_requests ADD COLUMN payment_method TEXT',
+    'ALTER TABLE order_requests ADD COLUMN amount_paid REAL',
+    'ALTER TABLE order_requests ADD COLUMN currency TEXT'
   ]) {
     try { await db.exec(col); } catch {}
   }

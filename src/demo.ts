@@ -1,4 +1,4 @@
-import type {Farmer,Listing,Order,User} from './api';
+import type {Farmer,Listing,Order,Payment,User} from './api';
 import {adminEmail,clerkPublishableKey} from './auth-config';
 // Presentation-only persistence. No credentials, API requests or real transactions.
 const key='wirefen-presentation-v1';
@@ -6,7 +6,7 @@ type Identity={id:string;name:string;email:string;verifiedEmails:string[]};
 let identity:Identity|null=null;
 export function setDemoIdentity(value:Identity|null){identity=value;}
 const isAdmin=()=>!!identity?.verifiedEmails.some(email=>email.toLowerCase()===adminEmail);
-type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buyer_id:string})[];baselines:Record<string,Record<string,unknown>>;drafts:Record<string,Record<string,unknown>>;session:string|null;pwa:Record<string,string>};
+type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buyer_id:string})[];payments?:Payment[];baselines:Record<string,Record<string,unknown>>;drafts:Record<string,Record<string,unknown>>;session:string|null;pwa:Record<string,string>};
 const now=()=>new Date().toISOString();
 const day=(n=0)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
 function seed():State{
@@ -28,7 +28,7 @@ function seed():State{
  ['Green cabbage','Vegetables',3600,6.8,2,'cabbage',14,'Crisp green cabbages with tightly packed leaves, supplied in bulk crates.','WF-ZA-KZ-2026-CAB05',4.5],
  ['Red kidney beans','Legumes',6000,24,1,'beans',180,'Dried red kidney beans, sorted for wholesalers and processors.','WF-ZA-WC-2026-BN06',4.9]];
  const listings:Listing[]=products.map(([title,crop_category,available_volume,price,f,image,shelf_life_days,description,traceability,agent_score],i)=>({id:`produce-${i+1}`,farmer_id:farmers[f].id,title,crop_category,available_volume,price,harvest_date:day(-1),expiration_date:day(shelf_life_days),shelf_life_days,preservative_used:0,description,image:`/images/${image}.jpg`,farm_name:farmers[f].farm_name,location:farmers[f].location,verification_status:farmers[f].verification_status,traceability,agent_score}));
-  return {users,farmers,listings,session:null,drafts:{},baselines:{'farm-1':{crop_type:'Tomatoes',avg_land_size:24,avg_yield_per_acre:2800,avg_duration_days:90,cost_fertilizer_seeds:12000,cost_labor:18000,cost_processing:6000,cost_transportation:5000,avg_production_cost:41000,status:'complete'},'farm-2':{crop_type:'Maize',avg_land_size:80,avg_yield_per_acre:3200,avg_duration_days:120,cost_fertilizer_seeds:32000,cost_labor:40000,cost_processing:14000,cost_transportation:10000,avg_production_cost:96000,status:'complete'},'farm-3':{crop_type:'Potatoes',avg_land_size:42,avg_yield_per_acre:4000,avg_duration_days:110,cost_fertilizer_seeds:20000,cost_labor:25000,cost_processing:9000,cost_transportation:7000,avg_production_cost:61000,status:'draft'}},orders:[{id:'sample-order-1',listing_id:'produce-1',title:'Roma tomatoes',volume:250,delivery_location:'Pretoria fresh market',notes:'Sample request: Friday morning collection.',status:'In review',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'},{id:'sample-order-2',listing_id:'produce-2',title:'Golden yellow maize',volume:5000,delivery_location:'Cape Town distribution centre',notes:'Sample request: bulk packaging preferred.',status:'New',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'}],pwa:{}};
+  return {users,farmers,listings,session:null,drafts:{},baselines:{'farm-1':{crop_type:'Tomatoes',avg_land_size:24,avg_yield_per_acre:2800,avg_duration_days:90,cost_fertilizer_seeds:12000,cost_labor:18000,cost_processing:6000,cost_transportation:5000,avg_production_cost:41000,status:'complete'},'farm-2':{crop_type:'Maize',avg_land_size:80,avg_yield_per_acre:3200,avg_duration_days:120,cost_fertilizer_seeds:32000,cost_labor:40000,cost_processing:14000,cost_transportation:10000,avg_production_cost:96000,status:'complete'},'farm-3':{crop_type:'Potatoes',avg_land_size:42,avg_yield_per_acre:4000,avg_duration_days:110,cost_fertilizer_seeds:20000,cost_labor:25000,cost_processing:9000,cost_transportation:7000,avg_production_cost:61000,status:'draft'}},orders:[{id:'sample-order-1',listing_id:'produce-1',title:'Roma tomatoes',volume:250,delivery_location:'Pretoria fresh market',notes:'Sample request: Friday morning collection.',status:'In review',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'},{id:'sample-order-2',listing_id:'produce-2',title:'Golden yellow maize',volume:5000,delivery_location:'Cape Town distribution centre',notes:'Sample request: bulk packaging preferred.',status:'New',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'}],payments:[],pwa:{}};
 }
 let memory:State|undefined;
 function load():State{try{const saved=localStorage.getItem(key);if(saved)return JSON.parse(saved);}catch{}return memory??=seed();}
@@ -67,7 +67,7 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  if(route==='/auth/demo')throw new Error('Sample account switching is disabled. Sign in with your Clerk account.');
  if(route==='/auth/logout'){data.session=null;return finish({ok:true});}
  if(route.startsWith('/auth/'))throw new Error('Use Clerk to sign in or create your account.');
- if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,ZAR:20},dates:{EUR:day(),USD:day(),ZAR:day()},fetched_at:now(),source:'Illustrative presentation rates',stale:false,demo:true};
+ if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,ZAR:20,MWK:1885.5,ZMW:29.5},dates:{EUR:day(),USD:day(),ZAR:day(),MWK:day(),ZMW:day()},fetched_at:now(),source:'Illustrative presentation rates (including MWK & ZMW)',stale:false,demo:true};
  if(route==='/pwa/session'||route==='/pwa/events'){if(method==='POST'&&['prompted','dismissed','installed'].includes(String(body.event)))data.pwa[String(body.event)+'_at']??=now();return finish({...data.pwa,suppress_prompt:!!(data.pwa.prompted_at||data.pwa.dismissed_at||data.pwa.installed_at),device_installed:!!data.pwa.installed_at});}
  if(route==='/account/consent'){account(['Farmer','Buyer','Admin','Agent']).sms_opt_in=!!body.sms_opt_in;return finish({ok:true});}
  if(route==='/farmers'){account(['Admin']);return finish(data.farmers.map(f=>({...f,baseline_status:data.baselines[f.id]?.status})));}
@@ -138,5 +138,70 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   data.orders.unshift({id,listing_id:item.id,title:item.title,volume:Number(body.volume),delivery_location:String(body.delivery_location),notes:String(body.notes||''),status:'New',created_at:now(),buyer_id:u.id,buyer_name:u.name,phone:u.phone});return finish({id,status:'New'});
  }
  if(route.startsWith('/orders/')&&method==='PATCH'){account(['Admin']);const order=data.orders.find(o=>o.id===route.split('/')[2]);if(!order)throw new Error('Sample request not found.');order.status=String(body.status);return finish({ok:true});}
+ if(route==='/payments'){
+  const u=account(method==='GET'?['Buyer','Admin']:['Buyer','Admin']);
+  if(method==='GET')return finish((data.payments||[]).filter(p=>u.role==='Admin'||p.buyer_id===u.id));
+  const order=data.orders.find(o=>o.id===body.order_id);
+  if(!order)throw new Error('Order not found.');
+  const id=crypto.randomUUID(),nowStr=now();
+  const prefix=body.currency==='MWK'?'MWK':body.currency==='ZMW'?'ZMW':String(body.currency||'MWK');
+  const ref=`WF-${prefix}-${Date.now().toString().slice(-6)}-DEMO`;
+  const payment:Payment={id,order_id:String(body.order_id),buyer_id:order.buyer_id,amount:Number(body.amount),currency:String(body.currency),method:String(body.method),provider:String(body.provider),bank_name:body.bank_name?String(body.bank_name):undefined,account_or_phone:String(body.account_or_phone),status:'completed',reference:ref,notes:body.notes?String(body.notes):'',created_at:nowStr};
+  data.payments??=[];
+  data.payments.unshift(payment);
+  order.payment_status='paid';
+  order.payment_ref=ref;
+  order.payment_method=`${payment.method}: ${payment.provider}${payment.bank_name?' ('+payment.bank_name+')':''}`;
+  order.amount_paid=payment.amount;
+  order.currency=payment.currency;
+  if(order.status==='New')order.status='In review';
+  return finish(payment);
+ }
+ if(route.startsWith('/payments/')){
+  const u=account(['Buyer','Admin']);
+  const orderId=route.split('/')[2];
+  return finish((data.payments||[]).filter(p=>p.order_id===orderId&&(u.role==='Admin'||p.buyer_id===u.id)));
+ }
+ if(route==='/ussd/simulate'&&method==='POST'){
+  const text=String(body.text||'').trim();
+  const rawParts=text.split('*').map(s=>s.trim());
+  const parts=(rawParts.length===1&&rawParts[0]==='')?[]:rawParts;
+  const phoneNumber=String(body.phoneNumber||'+265991234567');
+  const currency=phoneNumber.startsWith('+265')?'MWK':phoneNumber.startsWith('+260')?'ZMW':'MWK';
+  const existing=data.users.find(u=>u.phone===phoneNumber);
+  let response='CON Welcome to Wirefen Marketplace\n1. Register as Farmer\n2. Register as Buyer\n3. Check Crop Prices ('+currency+')\n0. Exit';
+  if(!existing){
+   if(parts.length===1&&parts[0]==='1')response='CON Enter your Full Name:';
+   else if(parts.length===2&&parts[0]==='1')response='CON Select your Country:\n1. Malawi\n2. Zambia';
+   else if(parts.length===3&&parts[0]==='1')response='CON Enter your District (e.g. Lilongwe, Kasungu, Chipata):';
+   else if(parts.length===4&&parts[0]==='1')response='CON Enter your Ward or Locality (e.g. Mitundu, Chulu):';
+   else if(parts.length>=5&&parts[0]==='1'){
+    const name=parts[1],district=parts[3];
+    response=`END Welcome to Wirefen, ${name}!\nYour Farmer profile is active in ${district}, Malawi. Dial *211# anytime to check prices or record farm costs.`;
+   }
+   else if(parts.length===1&&parts[0]==='2')response='CON Enter your Name or Business:';
+   else if(parts.length===2&&parts[0]==='2')response='CON Select your Country:\n1. Malawi\n2. Zambia';
+   else if(parts.length===3&&parts[0]==='2')response='CON Enter your City/District:';
+   else if(parts.length>=4&&parts[0]==='2')response=`END Welcome to Wirefen, ${parts[1]}!\nYour Buyer account is registered in ${parts[3]}. Dial *211# or visit wirefen.com to place orders.`;
+   else if(parts[0]==='3')response='END Wirefen Market Prices:\nMaize: MWK 850 / ZMW 14/kg\nTomatoes: MWK 1,500 / ZMW 25/kg\nSoya Beans: MWK 1,200 / ZMW 20/kg\nPotatoes: MWK 1,100 / ZMW 18/kg';
+   else if(parts[0]==='0')response='END Thank you for visiting Wirefen Marketplace. Dial *211# anytime.';
+  } else {
+   if(parts.length===0)response=`CON Wirefen Farmer: Muli bwanji ${existing.name.split(' ')[0]}!\n1. Check Crop Prices\n2. Record Form 1 Farm Costs\n3. My Farm Profile\n0. Exit`;
+   else if(parts[0]==='1')response='END Wirefen Market Prices:\nMaize: MWK 850 / ZMW 14/kg\nTomatoes: MWK 1,500 / ZMW 25/kg\nSoya Beans: MWK 1,200 / ZMW 20/kg\nPotatoes: MWK 1,100 / ZMW 18/kg';
+   else if(parts[0]==='2'){
+    if(parts.length===1)response='CON Form 1 Financial Breakdown (1/4):\nExpected spend for Fertilizer & Seeds? (Reply 0 to skip):';
+    else if(parts.length===2)response='CON Step 2/4: Expected spend for Labor? (Reply 0 to skip):';
+    else if(parts.length===3)response='CON Step 3/4: Expected spend for Processing? (Reply 0 to skip):';
+    else if(parts.length===4)response='CON Step 4/4: Expected spend for Transportation? (Reply 0 to skip):';
+    else if(parts.length>=5){
+     const total=(Number(parts[1])||0)+(Number(parts[2])||0)+(Number(parts[3])||0)+(Number(parts[4])||0);
+     response=`END Costs saved!\nTotal Estimated Cost: ${currency} ${total}.\nThank you!`;
+    }
+   }
+   else if(parts[0]==='3')response=`END Farm: ${existing.farmer?.farm_name||'Family Farm'}\nLocation: ${existing.farmer?.location||'Malawi'}\nStatus: ${existing.farmer?.verification_status||'Verified'}`;
+   else if(parts[0]==='0')response='END Thank you for using Wirefen. Dial *211# anytime.';
+  }
+  return finish({sessionId:String(body.sessionId||'demo-session'),phoneNumber,response,isEnd:response.startsWith('END'),menuText:response.replace(/^(CON|END)\s+/,'')});
+ }
  throw new Error('This action is not available in the presentation.');
 }

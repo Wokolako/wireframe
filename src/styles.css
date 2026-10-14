@@ -40,3 +40,46 @@
 .admin-view-tabs button{padding:9px 16px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:#556350}
 .admin-view-tabs button.active{background:var(--primary);color:var(--white);border-color:var(--primary)}
 
+/* Payments & USSD Simulator Styles */
+.status-paid{background:#e3f2dc;color:#2c5b20;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.payment-dialog{max-width:540px;width:calc(100% - 30px);max-height:calc(100dvh - 40px);border:0;border-radius:16px;padding:30px;background:var(--background);color:var(--text);box-shadow:0 15px 70px #0b1e2140}
+.payment-dialog::backdrop{background:#10261f99}
+.payment-order-summary{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0 20px}
+.payment-order-summary .summary-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
+.payment-order-summary .summary-total{font-size:16px;font-weight:700;color:var(--primary);border-top:1px solid var(--border);margin-top:8px;padding-top:8px}
+.payment-methods-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.method-card{display:flex;flex-direction:column;align-items:flex-start;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer;text-align:left;transition:all .15s ease}
+.method-card.selected{border-color:var(--primary);background:#edf5ea;box-shadow:0 0 0 1px var(--primary)}
+.method-card strong{font-size:13px;display:flex;align-items:center;gap:6px}
+.method-card small{font-size:11px;color:var(--muted);margin-top:4px}
+.receipt-card{background:var(--surface);border:2px dashed #b8c9b2;border-radius:12px;padding:24px;margin:20px 0;text-align:center}
+.receipt-badge{width:50px;height:50px;background:#e3f2dc;color:#2c5b20;border-radius:50%;display:grid;place-items:center;margin:0 auto 12px}
+.receipt-card h3{font-size:20px;color:var(--forest)}
+.receipt-details{margin-top:16px;text-align:left;font-size:12px}
+.receipt-details .row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eef2ea}
+.btn-ussd-dial{display:inline-flex;align-items:center;gap:6px;background:#244c36;color:#e8f4eb;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600}
+.btn-ussd-dial:hover{background:#183626;color:#fff}
+
+/* USSD Phone Simulator */
+.ussd-modal{max-width:400px;width:calc(100% - 24px);padding:0;background:transparent;border:0}
+.ussd-modal::backdrop{background:#0a1712cc}
+.phone-case{background:#232d26;border:8px solid #161e18;border-radius:36px;padding:20px;box-shadow:0 25px 60px rgba(0,0,0,0.5);color:#fff}
+.phone-speaker{width:60px;height:6px;background:#101511;border-radius:4px;margin:0 auto 14px}
+.phone-screen{background:#0e1d13;border:3px solid #08100a;border-radius:12px;padding:14px;min-height:220px;display:flex;flex-direction:column;justify-content:space-between;font-family:'Courier New',Courier,monospace;color:#92e8a2;box-shadow:inset 0 0 12px rgba(0,0,0,0.8)}
+.phone-screen-bar{display:flex;justify-content:space-between;font-size:11px;border-bottom:1px dashed #244229;padding-bottom:6px;margin-bottom:8px;color:#67b575}
+.phone-screen-text{font-size:13px;line-height:1.45;white-space:pre-wrap;flex:1;overflow-y:auto;max-height:160px}
+.phone-input-bar{display:flex;gap:6px;margin-top:10px;border-top:1px dashed #244229;padding-top:8px}
+.phone-input{background:#060d08;border:1px solid #2d5232;color:#a8f7b7;font-family:monospace;padding:6px 10px;border-radius:4px;font-size:14px;flex:1;min-height:36px}
+.phone-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:18px}
+.keypad-btn{background:#354038;color:#e8f0e9;font-weight:600;font-size:16px;border-radius:10px;padding:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px solid #47544b}
+.keypad-btn:hover{background:#47544b}
+.keypad-btn small{font-size:9px;color:#a3b2a7;font-weight:400;margin-top:2px}
+.keypad-call{background:#236b3b;color:#fff;border-color:#2e854b}
+.keypad-call:hover{background:#2e854b}
+.keypad-end{background:#8a2822;color:#fff;border-color:#a8332c}
+.keypad-end:hover{background:#a8332c}
+.ussd-quick-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+.ussd-chip{font-size:11px;padding:4px 8px;background:#313b33;color:#c8d7ca;border-radius:6px;cursor:pointer}
+.ussd-chip:hover{background:#414f44;color:#fff}
+
+
