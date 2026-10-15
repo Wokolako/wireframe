@@ -49,3 +49,216 @@ test('Appendix B: Form 1 Guided Breakdown automatically aggregates costs via API
  assert.equal(saved.avg_production_cost,15000);
 });
 
+test('Appendix C: RBAC enforces financial data isolation and strict role boundaries',async()=>{
+ const buyer=await demo('Buyer');
+ const farmer=await demo('Farmer');
+ const agent=await demo('Agent');
+ const admin=await demo('Admin');
+
+ // 1. Sellers (Farmers): Read/Write strictly limited to their own financial submissions
+ const ownRead=await call('/farmers/farm-1/baseline',{cookie:farmer});
+ assert.equal(ownRead.status,200);
+ const otherRead=await call('/farmers/farm-2/baseline',{cookie:farmer});
+ assert.equal(otherRead.status,403);
+ const otherWrite=await call('/farmers/farm-2/baseline',{cookie:farmer,method:'PATCH',body:{cost_labor:1000}});
+ assert.equal(otherWrite.status,403);
+
+ // 2. Buyers: NO ACCESS to farmer financial data (costs, margins, etc.)
+ const buyerAccess=await call('/farmers/farm-1/baseline',{cookie:buyer});
+ assert.equal(buyerAccess.status,403);
+ const buyerListings=await call('/listings',{cookie:buyer});
+ assert.equal(buyerListings.status,200);
+ assert.ok(buyerListings.data.length>0);
+ for(const item of buyerListings.data){
+  assert.equal(item.cost_fertilizer_seeds,undefined);
+  assert.equal(item.cost_labor,undefined);
+  assert.equal(item.cost_processing,undefined);
+  assert.equal(item.cost_transportation,undefined);
+  assert.equal(item.avg_production_cost,undefined);
+  assert.ok('price' in item);
+  assert.ok('available_volume' in item);
+  assert.ok('traceability' in item);
+  assert.ok('agent_score' in item);
+ }
+
+ // 3. Agents: NO ACCESS to farmer financial data, only physical verification requirements
+ const agentBaseline=await call('/farmers/farm-1/baseline',{cookie:agent});
+ assert.equal(agentBaseline.status,403);
+ const agentAnalytics=await call('/analytics/financial',{cookie:agent});
+ assert.equal(agentAnalytics.status,403);
+
+ const verifs=await call('/verifications',{cookie:agent});
+ assert.equal(verifs.status,200);
+ assert.ok(verifs.data.length>0);
+ const v1=verifs.data[0];
+ assert.ok('farm_name' in v1);
+ assert.ok('location' in v1);
+ assert.ok('country' in v1);
+ assert.ok('region' in v1);
+ assert.ok('farm_size' in v1);
+ assert.ok('verification_status' in v1);
+ assert.equal(v1.cost_fertilizer_seeds,undefined);
+ assert.equal(v1.avg_production_cost,undefined);
+
+ const patchVerif=await call(`/verifications/${v1.id}`,{cookie:agent,method:'PATCH',body:{verification_status:'Verified'}});
+ assert.equal(patchVerif.status,200);
+ assert.equal(patchVerif.data.verification_status,'Verified');
+
+ // 4. Platform Admins: Access to aggregated financial data for platform analytics
+ const buyerAnalytics=await call('/analytics/financial',{cookie:buyer});
+ assert.equal(buyerAnalytics.status,403);
+ const adminAnalytics=await call('/analytics/financial',{cookie:admin});
+ assert.equal(adminAnalytics.status,200);
+ assert.ok(Array.isArray(adminAnalytics.data.regional));
+ assert.ok(Array.isArray(adminAnalytics.data.by_crop));
+ assert.ok('summary' in adminAnalytics.data);
+ assert.ok(adminAnalytics.data.summary.total_submissions>=1);
+});
+
+test('Direct payment enables Malawian bank account & mobile money checkout with RBAC',async()=>{
+ const buyer=await demo('Buyer');
+ const farmer=await demo('Farmer');
+ const admin=await demo('Admin');
+
+ // 1. Buyer creates an order
+ const orderResp=await call('/orders',{cookie:buyer,body:{listing_id:'produce-1',volume:50,delivery_location:'Lilongwe',notes:'Pay via National Bank'}});
+ assert.equal(orderResp.status,201);
+ const orderId=orderResp.data.id;
+
+ // 2. Farmer cannot process or view payments (RBAC quarantine)
+ const farmerPay=await call('/payments',{cookie:farmer,body:{order_id:orderId,amount:150000,currency:'MWK',method:'malawian_bank',provider:'nbm',bank_name:'National Bank of Malawi',account_or_phone:'1002345678'}});
+ assert.equal(farmerPay.status,403);
+ const farmerList=await call('/payments',{cookie:farmer});
+ assert.equal(farmerList.status,403);
+
+ // 3. Buyer processes direct payment using National Bank of Malawi account
+ const payResp=await call('/payments',{cookie:buyer,body:{order_id:orderId,amount:150000,currency:'MWK',method:'malawian_bank',provider:'nbm',bank_name:'National Bank of Malawi',account_or_phone:'1002345678',notes:'Mo626 digital bank transfer'}});
+ assert.equal(payResp.status,201);
+ assert.equal(payResp.data.status,'completed');
+ assert.equal(payResp.data.currency,'MWK');
+ assert.equal(payResp.data.amount,150000);
+ assert.ok(payResp.data.reference.startsWith('WF-MWK-'));
+
+ // 4. Duplicate payment rejected
+ const dupResp=await call('/payments',{cookie:buyer,body:{order_id:orderId,amount:150000,currency:'MWK',method:'malawian_bank',provider:'nbm',account_or_phone:'1002345678'}});
+ assert.equal(dupResp.status,400);
+
+ // 5. Order is marked paid
+ const buyerOrders=await call('/orders',{cookie:buyer});
+ const updatedOrder=buyerOrders.data.find(o=>o.id===orderId);
+ assert.ok(updatedOrder);
+ assert.equal(updatedOrder.payment_status,'paid');
+ assert.equal(updatedOrder.amount_paid,150000);
+ assert.equal(updatedOrder.currency,'MWK');
+ assert.ok(updatedOrder.payment_ref.startsWith('WF-MWK-'));
+
+ // 6. Admin can inspect all payments, buyer inspects own
+ const buyerPayments=await call('/payments',{cookie:buyer});
+ assert.equal(buyerPayments.status,200);
+ assert.ok(buyerPayments.data.some(p=>p.order_id===orderId));
+ const adminPayments=await call('/payments',{cookie:admin});
+ assert.equal(adminPayments.status,200);
+ assert.ok(adminPayments.data.some(p=>p.order_id===orderId));
+});
+
+test('USSD *211# menu provides parallel signup, cost breakdown, and live market prices',async()=>{
+ const phone='+265991112233';
+
+ // 1. Initial dial *211# for unauthenticated Malawian user
+ const sim=async text=>call('/ussd/simulate',{body:{phoneNumber:phone,text}});
+
+ const step0=await sim('');
+ assert.equal(step0.status,200);
+ assert.equal(step0.data.isEnd,false);
+ assert.match(step0.data.response,/CON Welcome to Wirefen Marketplace/);
+ assert.match(step0.data.response,/1\. Register as Farmer/);
+ assert.match(step0.data.response,/2\. Register as Buyer/);
+
+ // 2. Step 1: Select 1 (Register as Farmer)
+ const step1=await sim('1');
+ assert.match(step1.data.response,/CON Enter your Full Name:/);
+
+ // 3. Step 2: Name
+ const step2=await sim('1*Chisomo Phiri');
+ assert.match(step2.data.response,/CON Select your Country:\n1. Malawi\n2. Zambia/);
+
+ // 4. Step 3: Country (1 for Malawi)
+ const step3=await sim('1*Chisomo Phiri*1');
+ assert.match(step3.data.response,/CON Enter your District in Malawi/);
+
+ // 5. Step 4: District
+ const step4=await sim('1*Chisomo Phiri*1*Kasungu');
+ assert.match(step4.data.response,/CON Enter your Ward or Locality/);
+
+ // 6. Step 5: Locality -> Completes registration
+ const step5=await sim('1*Chisomo Phiri*1*Kasungu*Chulu');
+ assert.equal(step5.data.isEnd,true);
+ assert.match(step5.data.response,/END Welcome to Wirefen, Chisomo Phiri!/);
+ assert.match(step5.data.response,/Kasungu, Malawi/);
+
+ // Verify in database: user created with SMS consent & geographic metadata
+ const registered=await db.get('SELECT * FROM users WHERE phone=?',[phone]);
+ assert.ok(registered);
+ assert.equal(registered.name,'Chisomo Phiri');
+ assert.equal(registered.role,'Farmer');
+ assert.equal(registered.sms_opt_in,1);
+
+ const farmProfile=await db.get('SELECT * FROM farmer_profiles WHERE user_id=?',[registered.id]);
+ assert.ok(farmProfile);
+ assert.equal(farmProfile.country,'Malawi');
+ assert.equal(farmProfile.district,'Kasungu');
+ assert.equal(farmProfile.locality,'Chulu');
+
+ // 7. Dialing *211# now greets the registered farmer
+ const authDial=await sim('');
+ assert.match(authDial.data.response,/CON Wirefen Farmer: Muli bwanji Chisomo!/);
+ assert.match(authDial.data.response,/2\. Record Form 1 Farm Costs/);
+
+ // 8. Check market prices (MWK)
+ const prices=await sim('1');
+ assert.equal(prices.data.isEnd,true);
+ assert.match(prices.data.response,/Wirefen Market Prices:/);
+ assert.match(prices.data.response,/MWK/);
+
+ // 9. Record Form 1 guided financial breakdown via USSD
+ const costSaved=await sim('2*120000*60000*25000*15000');
+ assert.equal(costSaved.data.isEnd,true);
+ assert.match(costSaved.data.response,/Costs saved!/);
+ assert.match(costSaved.data.response,/Total Estimated Cost: MWK 220000/);
+
+ const baseline=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[farmProfile.id]);
+ assert.ok(baseline);
+ assert.equal(baseline.cost_fertilizer_seeds,120000);
+ assert.equal(baseline.cost_labor,60000);
+ assert.equal(baseline.cost_processing,25000);
+ assert.equal(baseline.cost_transportation,15000);
+ assert.equal(baseline.avg_production_cost,220000);
+});
+
+test('SMS JOIN command registers farmer with Appendix A standardized geography',async()=>{
+ const smsPhone='+265998887766';
+ const params={From:smsPhone,MessageSid:'SM'+Math.random(),Body:'JOIN FARMER Mary Banda, Malawi, Mchinji, Kochilira'};
+ const signature=twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN,process.env.TWILIO_WEBHOOK_URL,params);
+ const resp=await fetch(base+'/webhooks/sms/receive',{
+  method:'POST',
+  headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature},
+  body:new URLSearchParams(params)
+ });
+ assert.equal(resp.status,200);
+ const text=await resp.text();
+ assert.match(text,/Welcome to Wirefen, Mary Banda!/);
+
+ const user=await db.get('SELECT * FROM users WHERE phone=?',[smsPhone]);
+ assert.ok(user);
+ assert.equal(user.name,'Mary Banda');
+ assert.equal(user.role,'Farmer');
+
+ const profile=await db.get('SELECT * FROM farmer_profiles WHERE user_id=?',[user.id]);
+ assert.ok(profile);
+ assert.equal(profile.country,'Malawi');
+ assert.equal(profile.district,'Mchinji');
+ assert.equal(profile.locality,'Kochilira');
+});
+
+
+

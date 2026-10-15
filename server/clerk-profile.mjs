@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {hashPassword} from './seed.mjs';
 export const profileSchema=z.object({
  name:z.string().trim().min(2).max(100),phone:z.string().regex(/^\+[1-9]\d{7,14}$/,'Use an international number, such as +27821234567.'),
- role:z.enum(['Buyer','Farmer']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).default(''),
+ role:z.enum(['Buyer','Farmer','Agent']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).default(''),
  country:z.string().trim().max(100).default(''),region:z.string().trim().max(100).default(''),district:z.string().trim().max(100).optional(),
  locality:z.string().trim().max(100).default(''),ward:z.string().trim().max(100).optional(),location:z.string().trim().max(100).default('')
 }).superRefine((v,ctx)=>{

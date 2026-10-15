@@ -107,6 +107,8 @@ model Listing {
   preservative_used Int            @default(0)
   description       String         @default("")
   image             String
+  traceability      String         @default("")
+  agent_score       Float          @default(0)
   status            String         @default("published")
   created_at        String
   farmer            FarmerProfile  @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
