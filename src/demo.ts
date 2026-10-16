@@ -1,3 +1,6 @@
+import {normalizeGeography,hasGeography} from '../shared/geography.mjs';
+import {guestLimitFor,guestLimits} from '../shared/guest-limits.mjs';
+import {costFields,mergeCosts} from '../shared/finance.mjs';
 import type {Farmer,Listing,Order,Payment,User} from './api';
 import {adminEmail,clerkPublishableKey} from './auth-config';
 // Presentation-only persistence. No credentials, API requests or real transactions.
@@ -6,32 +9,14 @@ type Identity={id:string;name:string;email:string;verifiedEmails:string[]};
 let identity:Identity|null=null;
 export function setDemoIdentity(value:Identity|null){identity=value;}
 const isAdmin=()=>!!identity?.verifiedEmails.some(email=>email.toLowerCase()===adminEmail);
-type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buyer_id:string})[];payments?:Payment[];baselines:Record<string,Record<string,unknown>>;drafts:Record<string,Record<string,unknown>>;session:string|null;pwa:Record<string,string>};
+type State={users:User[];farmers:Farmer[];listings:Listing[];orders:(Order&{buyer_id:string})[];payments?:Payment[];guestOrders?:Record<string,unknown>[];bulkOrders?:Record<string,unknown>[];baselines:Record<string,Record<string,unknown>>;drafts:Record<string,Record<string,unknown>>;session:string|null;pwa:Record<string,string>};
 const now=()=>new Date().toISOString();
 const day=(n=0)=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
 function seed():State{
- const farms=[
-  ['Thandi Mokoena','Mokoena Family Farm','South Africa','Capricorn District','Polokwane Ward 12',24],
-  ['Pieter van der Merwe','Valley View Growers','South Africa','Cape Winelands','Stellenbosch Ward 8',120],
-  ['Nomsa Dlamini','Green Roots Cooperative','South Africa','uMgungundlovu','Msunduzi Ward 22',42]
- ] as const;
- const farmers:Farmer[]=farms.map(([name,farm_name,country,region,locality,farm_size],i)=>{
-  const location=`${locality}, ${region}, ${country}`;
-  return {id:`farm-${i+1}`,user_id:`farmer-${i+1}`,name,farm_name,country,region,district:region,locality,ward:locality,location,farm_size,phone:`+2782000000${i+1}`,verification_status:i===2?'Pending':'Verified'};
- });
- const users:User[]=[...farmers.map(f=>({id:f.user_id,name:f.name!,phone:f.phone!,role:'Farmer' as const,sms_opt_in:false,farmer:f})),{id:'buyer-1',name:'Alex Morgan',phone:'+27820000004',role:'Buyer',sms_opt_in:false,farmer:null},{id:'agent-1',name:'Kuda Moyo (Field Agent)',phone:'+27820000006',role:'Agent',sms_opt_in:false,farmer:null},{id:'admin-1',name:'Wirefen Operations',phone:'+27820000005',role:'Admin',sms_opt_in:false,farmer:null}];
- const products:[string,string,number,number,number,string,number,string,string,number][]=[
- ['Roma tomatoes','Vegetables',2500,12.5,0,'tomatoes',10,'Firm, sun-ripened Roma tomatoes, sorted and packed in reusable crates.','WF-ZA-LP-2026-TOM01',4.9],
- ['Golden yellow maize','Grains',18000,4.8,1,'maize',180,'Dry yellow maize, cleaned and ready for bulk collection.','WF-ZA-WC-2026-MAZ02',4.7],
- ['Fresh Hass avocados','Fruits',1800,28,0,'avocados',12,'Creamy Hass avocados, harvested mature green for reliable ripening.','WF-ZA-LP-2026-AVO03',4.8],
- ['Golden potatoes','Tubers',4200,9.5,2,'potatoes',30,'Freshly lifted golden potatoes, field sorted and ready for packing.','WF-ZA-KZ-2026-POT04',4.6],
- ['Green cabbage','Vegetables',3600,6.8,2,'cabbage',14,'Crisp green cabbages with tightly packed leaves, supplied in bulk crates.','WF-ZA-KZ-2026-CAB05',4.5],
- ['Red kidney beans','Legumes',6000,24,1,'beans',180,'Dried red kidney beans, sorted for wholesalers and processors.','WF-ZA-WC-2026-BN06',4.9]];
- const listings:Listing[]=products.map(([title,crop_category,available_volume,price,f,image,shelf_life_days,description,traceability,agent_score],i)=>({id:`produce-${i+1}`,farmer_id:farmers[f].id,title,crop_category,available_volume,price,harvest_date:day(-1),expiration_date:day(shelf_life_days),shelf_life_days,preservative_used:0,description,image:`/images/${image}.jpg`,farm_name:farmers[f].farm_name,location:farmers[f].location,verification_status:farmers[f].verification_status,traceability,agent_score}));
-  return {users,farmers,listings,session:null,drafts:{},baselines:{'farm-1':{crop_type:'Tomatoes',avg_land_size:24,avg_yield_per_acre:2800,avg_duration_days:90,cost_fertilizer_seeds:12000,cost_labor:18000,cost_processing:6000,cost_transportation:5000,avg_production_cost:41000,status:'complete'},'farm-2':{crop_type:'Maize',avg_land_size:80,avg_yield_per_acre:3200,avg_duration_days:120,cost_fertilizer_seeds:32000,cost_labor:40000,cost_processing:14000,cost_transportation:10000,avg_production_cost:96000,status:'complete'},'farm-3':{crop_type:'Potatoes',avg_land_size:42,avg_yield_per_acre:4000,avg_duration_days:110,cost_fertilizer_seeds:20000,cost_labor:25000,cost_processing:9000,cost_transportation:7000,avg_production_cost:61000,status:'draft'}},orders:[{id:'sample-order-1',listing_id:'produce-1',title:'Roma tomatoes',volume:250,delivery_location:'Pretoria fresh market',notes:'Sample request: Friday morning collection.',status:'In review',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'},{id:'sample-order-2',listing_id:'produce-2',title:'Golden yellow maize',volume:5000,delivery_location:'Cape Town distribution centre',notes:'Sample request: bulk packaging preferred.',status:'New',created_at:now(),buyer_id:'buyer-1',buyer_name:'Alex Morgan',phone:'+27820000004'}],payments:[],pwa:{}};
+ return {users:[],farmers:[],listings:[],orders:[],payments:[],baselines:{},drafts:{},session:null,pwa:{}};
 }
 let memory:State|undefined;
-function load():State{try{const saved=localStorage.getItem(key);if(saved)return JSON.parse(saved);}catch{}return memory??=seed();}
+function load():State{if(memory)return memory;try{const saved=localStorage.getItem(key);if(saved){memory=JSON.parse(saved);if(memory){memory.baselines={};return memory;}}}catch{}return memory=seed();}
 export async function demoApi(path:string,options:RequestInit={}):Promise<unknown>{
  const data=load(),url=new URL(path,'https://presentation.invalid'),route=url.pathname,q=url.searchParams,method=options.method||'GET';
  const body:Record<string,unknown>=options.body?JSON.parse(String(options.body)):{};
@@ -41,97 +26,102 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   if(!user){user={id:identity.id,name:identity.name||'George Chivalo',email:identity.email,phone:'Not provided',role:'Admin',sms_opt_in:false,farmer:null};data.users.push(user);}
   user.role='Admin';user.farmer=null;
  }else if(user?.role==='Admin'){user.role='Buyer';user.farmer=null;}
- const finish=(value:unknown)=>{memory=data;try{localStorage.setItem(key,JSON.stringify(data));}catch{}return structuredClone(value);};
+ const finish=(value:unknown)=>{memory=data;try{localStorage.setItem(key,JSON.stringify({...data,baselines:{}}));}catch{}return structuredClone(value);};
  const account=(roles:string[])=>{if(!user||!roles.includes(user.role))throw new Error('Sign in with an authorized account to continue.');return user;};
  if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey};
  if(route==='/auth/me')return finish(user);
  if(route==='/auth/onboard'){
   if(!identity)throw new Error('Sign in with Clerk to create your profile.');if(user)return finish(user);
-  if(!['Buyer','Farmer','Agent'].includes(String(body.role)))throw new Error('Choose Buyer, Farmer, or Agent.');
-  const name=String(body.name||'').trim(),phone=String(body.phone||'').trim(),role=body.role as 'Buyer'|'Farmer'|'Agent';
+  if(!['Buyer','Farmer'].includes(String(body.role)))throw new Error('Choose Buyer or Farmer.');
+  const name=String(body.name||'').trim(),phone=String(body.phone||'').trim(),role=body.role as 'Buyer'|'Farmer';
   if(name.length<2||!/^\+[1-9]\d{7,14}$/.test(phone))throw new Error('Enter your name and a phone number with its country code.');
   if(data.users.some(u=>u.phone===phone))throw new Error('This phone number is already used by another profile on this device.');
   let farmer:Farmer|null=null;
   if(role==='Farmer'){
    const farm_name=String(body.farm_name||'').trim();
-   const country=String(body.country||'South Africa').trim();
-   const region=String(body.region||body.district||body.location||'').trim();
-   const locality=String(body.locality||body.ward||body.location||'').trim();
-   const location=String(body.location||[locality,region,country].filter(Boolean).join(', ')).trim();
-   if(!farm_name||(!location&&(!country||!region||!locality)))throw new Error('Enter your farm name and location.');
-   farmer={id:'farm-'+identity.id,user_id:identity.id,name,phone,farm_name,country,region,district:region,locality,ward:locality,location,farm_size:0,verification_status:'Unverified'};
+   const g=normalizeGeography(body);
+   if(farm_name.length<2)throw new Error('Enter your farm name.');
+   farmer={...g,id:'farm-'+identity.id,user_id:identity.id,name,phone,farm_name,farm_size:0,verification_status:'Unverified'};
    data.farmers.push(farmer);
   }
   user={id:identity.id,name,email:identity.email,phone,role,sms_opt_in:!!body.sms_opt_in,farmer};data.users.push(user);return finish(user);
  }
  if(route==='/auth/demo')throw new Error('Sample account switching is disabled. Sign in with your Clerk account.');
- if(route==='/auth/logout'){data.session=null;return finish({ok:true});}
+ if(route==='/auth/logout'){data.session=null;data.baselines={};return finish({ok:true});}
  if(route.startsWith('/auth/'))throw new Error('Use Clerk to sign in or create your account.');
  if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,ZAR:20,MWK:1885.5,ZMW:29.5},dates:{EUR:day(),USD:day(),ZAR:day(),MWK:day(),ZMW:day()},fetched_at:now(),source:'Illustrative presentation rates (including MWK & ZMW)',stale:false,demo:true};
  if(route==='/pwa/session'||route==='/pwa/events'){if(method==='POST'&&['prompted','dismissed','installed'].includes(String(body.event)))data.pwa[String(body.event)+'_at']??=now();return finish({...data.pwa,suppress_prompt:!!(data.pwa.prompted_at||data.pwa.dismissed_at||data.pwa.installed_at),device_installed:!!data.pwa.installed_at});}
  if(route==='/account/consent'){account(['Farmer','Buyer','Admin','Agent']).sms_opt_in=!!body.sms_opt_in;return finish({ok:true});}
+ if(route==='/account/location'){
+  const u=account(['Farmer']),g=normalizeGeography(body);if(!u.farmer)throw new Error('Farm not found.');Object.assign(u.farmer,g);Object.assign(data.farmers.find(f=>f.id===u.farmer!.id)!,g);return finish(u);
+ }
+ if(route==='/admin/financial-analytics'){account(['Admin']);return {minimum_group_size:5,regions:[]};}
+ if(route==='/admin/agents'||route==='/admin/verifications'){account(['Admin']);return [];}
+ if(route==='/agent/verifications'){account(['Agent']);return [];}
  if(route==='/farmers'){account(['Admin']);return finish(data.farmers.map(f=>({...f,baseline_status:data.baselines[f.id]?.status})));}
- if(route==='/verifications'){account(['Agent','Admin']);return finish(data.farmers.map(f=>({id:f.id,farm_name:f.farm_name,country:f.country||'South Africa',region:f.region||f.district||'',district:f.district||f.region||'',locality:f.locality||f.ward||'',ward:f.ward||f.locality||'',location:f.location,farm_size:f.farm_size,verification_status:f.verification_status,farmer_name:f.name,contact_phone:f.phone})));}
- const verifRoute=route.match(/^\/verifications\/([^/]+)$/);
- if(verifRoute&&method==='PATCH'){account(['Agent','Admin']);const [,id]=verifRoute,farm=data.farmers.find(f=>f.id===id);if(!farm)throw new Error('Farm not found.');farm.verification_status=String(body.verification_status) as 'Verified'|'Pending'|'Unverified';return finish({ok:true,id,verification_status:farm.verification_status});}
- if(route==='/analytics/financial'){
-  account(['Admin']);
-  const regMap=new Map<string,{country:string;region:string;count:number;fert:number;labor:number;proc:number;trans:number;total:number;land:number;yield:number}>();
-  const cropMap=new Map<string,{crop_type:string;count:number;cost:number;yield:number}>();
-  let totalSubs=0,sumCost=0;
-  for(const farm of data.farmers){
-   const b=data.baselines[farm.id];
-   if(b&&b.avg_production_cost!=null){
-    totalSubs++;
-    const cost=Number(b.avg_production_cost)||0;
-    sumCost+=cost;
-    const regKey=`${farm.country||'South Africa'}__${farm.region||farm.district||'Unspecified'}`;
-    const curr=regMap.get(regKey)||{country:farm.country||'South Africa',region:farm.region||farm.district||'Unspecified',count:0,fert:0,labor:0,proc:0,trans:0,total:0,land:0,yield:0};
-    curr.count++;
-    curr.fert+=Number(b.cost_fertilizer_seeds)||0;
-    curr.labor+=Number(b.cost_labor)||0;
-    curr.proc+=Number(b.cost_processing)||0;
-    curr.trans+=Number(b.cost_transportation)||0;
-    curr.total+=cost;
-    curr.land+=Number(b.avg_land_size)||0;
-    curr.yield+=Number(b.avg_yield_per_acre)||0;
-    regMap.set(regKey,curr);
-    const cType=String(b.crop_type||'Other');
-    const cCurr=cropMap.get(cType)||{crop_type:cType,count:0,cost:0,yield:0};
-    cCurr.count++;
-    cCurr.cost+=cost;
-    cCurr.yield+=Number(b.avg_yield_per_acre)||0;
-    cropMap.set(cType,cCurr);
-   }
-  }
-  const regional=[...regMap.values()].map(r=>({country:r.country,region:r.region,total_baselines:r.count,avg_fertilizer_seeds:Math.round(r.fert/r.count*100)/100,avg_labor:Math.round(r.labor/r.count*100)/100,avg_processing:Math.round(r.proc/r.count*100)/100,avg_transportation:Math.round(r.trans/r.count*100)/100,avg_total_production_cost:Math.round(r.total/r.count*100)/100,avg_land_size:Math.round(r.land/r.count*100)/100,avg_yield_per_acre:Math.round(r.yield/r.count*100)/100}));
-  const by_crop=[...cropMap.values()].map(c=>({crop_type:c.crop_type,total_baselines:c.count,avg_production_cost:Math.round(c.cost/c.count*100)/100,avg_yield_per_acre:Math.round(c.yield/c.count*100)/100}));
-  return finish({regional,by_crop,summary:{total_submissions:totalSubs,overall_avg_cost:totalSubs?Math.round(sumCost/totalSubs*100)/100:0,overall_total_cost:sumCost}});
+ if(route==='/guest-limits')return structuredClone(guestLimits);
+ if(route==='/admin/listings'){
+  account(['Admin']);const rows=data.listings.filter(l=>['country_code','region','locality'].every(k=>!q.get(k)||String(k==='country_code'?data.farmers.find(f=>f.id===l.farmer_id)?.country_code:(data.farmers.find(f=>f.id===l.farmer_id) as unknown as Record<string,unknown>)?.[k]||'').toLowerCase()===q.get(k)!.toLowerCase())).map(l=>({...l,...data.farmers.find(f=>f.id===l.farmer_id)}));
+  const byUnit=new Map<string,number>();for(const row of rows){const unit=row.sale_unit||'kg';byUnit.set(unit,(byUnit.get(unit)||0)+Number(row.available_volume));}
+  return finish({listing_count:rows.length,total_available_kg:byUnit.get('kg')||0,stock_by_unit:[...byUnit].map(([unit,available])=>({unit,available})),listings:rows});
+ }
+ if(route==='/admin/guest-orders'){account(['Admin']);return finish(data.guestOrders||[]);}
+ if(route.startsWith('/admin/guest-orders/')&&method==='PATCH'){account(['Admin']);const row=data.guestOrders?.find(r=>r.id===route.split('/').pop());if(!row)throw new Error('Guest order not found.');row.status=body.status;return finish({id:row.id,status:row.status});}
+ if(route.startsWith('/admin/guest-orders/')&&route.endsWith('/collect-payment')&&method==='POST'){
+  account(['Admin']);const row=data.guestOrders?.find(r=>r.id===route.split('/')[3]);
+  if(!row||row.status!=='Confirmed'||row.payment_status==='paid')throw new Error('Confirm the unpaid order before recording delivery payment.');
+  row.payment_status='paid';row.paid_at=now();return finish({id:row.id,payment_status:'paid',paid_at:row.paid_at});
+ }
+ if(route==='/bulk-orders'){
+  const u=account(['Buyer','Admin']);if(method==='GET')return finish((data.bulkOrders||[]).filter(r=>u.role==='Admin'||r.buyer_id===u.id));
+  if(u.role!=='Buyer')throw new Error('Use a buyer account.');
+  const row={...body,id:crypto.randomUUID(),buyer_id:u.id,status:'New',created_at:now()};data.bulkOrders??=[];data.bulkOrders.push(row);return finish({id:row.id,status:'New'});
+ }
+ if(route.startsWith('/bulk-orders/')&&method==='PATCH'){const u=account(['Buyer','Admin']),row=data.bulkOrders?.find(r=>r.id===route.split('/')[2]);if(!row||u.role==='Buyer'&&row.buyer_id!==u.id)throw new Error('Request not found.');if(u.role==='Buyer'&&body.status!=='Cancelled')throw new Error('You may only cancel your request.');row.status=body.status;return finish({id:row.id,status:row.status});}
+ if(route==='/guest-orders'){
+  const item=data.listings.find(l=>l.id===body.listing_id&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified');const cap=guestLimitFor(item?.title||'');
+  if(!item||!cap||cap.unit!==(item.sale_unit||'kg')||Number(body.quantity)<=0||Number(body.quantity)>cap.max||Number(body.quantity)>item.available_volume)throw new Error(`The household limit is ${cap?.max||'unavailable'} ${cap?.unit||''}. Use a bulk order request.`);
+  const recent=(data.guestOrders||[]).filter(r=>r.status!=='Cancelled'&&Date.now()-Date.parse(String(r.created_at))<=86400000&&(r.contact_phone===body.contact_phone||String(r.contact_email).toLowerCase()===String(body.contact_email).toLowerCase())).filter(r=>guestLimitFor(data.listings.find(l=>l.id===r.listing_id)?.title||'')?.name===cap.name).reduce((sum,r)=>sum+Number(r.quantity),0);
+  if(recent+Number(body.quantity)>cap.max)throw new Error(`The household limit is ${cap.max} kg across orders in 24 hours. Use a bulk order request.`);
+  const row={...body,quantity_unit:cap.unit,payment_method:'pay_on_delivery',payment_status:'unpaid',unit_price:item.price,currency:'ZAR',id:crypto.randomUUID(),status:'New',created_at:now()};data.guestOrders??=[];data.guestOrders.push(row);return finish({id:row.id,status:'New',payment_method:'pay_on_delivery',payment_status:'unpaid'});
+ }
+ if(route==='/guest-orders/basket'){
+  const items=body.items as {listing_id:string;quantity:number}[];
+  if(!Array.isArray(items)||!items.length||new Set(items.map(x=>x.listing_id)).size!==items.length)throw new Error('Choose distinct produce for your basket.');
+  const totals=new Map<string,number>();for(const prior of data.guestOrders||[]){if(prior.status==='Cancelled'||Date.now()-Date.parse(String(prior.created_at))>86400000||prior.contact_phone!==body.contact_phone&&String(prior.contact_email).toLowerCase()!==String(body.contact_email).toLowerCase())continue;const listing=data.listings.find(l=>l.id===prior.listing_id),cap=guestLimitFor(listing?.title||'');if(cap)totals.set(cap.name,(totals.get(cap.name)||0)+Number(prior.quantity));}
+  for(const line of items){const item=data.listings.find(l=>l.id===line.listing_id&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified'),cap=guestLimitFor(item?.title||'');if(!item||!cap||cap.unit!==(item.sale_unit||'kg')||!(line.quantity>0)||line.quantity>item.available_volume)throw new Error('This produce needs a bulk order request.');totals.set(cap.name,(totals.get(cap.name)||0)+line.quantity);if((totals.get(cap.name)||0)>cap.max)throw new Error(`${cap.name} has a household limit of ${cap.max} ${cap.unit}. Use Order Request.`);}
+  const rows=items.map(line=>({...body,items:undefined,listing_id:line.listing_id,quantity:line.quantity,quantity_unit:guestLimitFor(data.listings.find(l=>l.id===line.listing_id)?.title||'')?.unit||'kg',payment_method:'pay_on_delivery',payment_status:'unpaid',unit_price:data.listings.find(l=>l.id===line.listing_id)?.price,currency:'ZAR',id:crypto.randomUUID(),status:'New',created_at:now()}));data.guestOrders??=[];data.guestOrders.push(...rows);return finish({ids:rows.map(r=>r.id),status:'New',payment_method:'pay_on_delivery',payment_status:'unpaid'});
  }
  const farmRoute=route.match(/^\/farmers\/([^/]+)\/(baseline|listing-draft)$/);
  if(farmRoute){
-  const u=account(['Farmer','Admin']),[,id,kind]=farmRoute,farm=data.farmers.find(f=>f.id===id);
+  const [,id,kind]=farmRoute,u=account(kind==='baseline'?['Farmer']:['Farmer','Admin']),farm=data.farmers.find(f=>f.id===id);
   if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');
   const table=kind==='baseline'?data.baselines:data.drafts;
   if(method!=='GET'){
    const updateData={...body};
    if(kind==='baseline'){
-    const hasBreakdown=['cost_fertilizer_seeds','cost_labor','cost_processing','cost_transportation'].some(k=>updateData[k]!==undefined&&updateData[k]!==null);
-    if(hasBreakdown){
-     updateData.avg_production_cost=(Number(updateData.cost_fertilizer_seeds)||0)+(Number(updateData.cost_labor)||0)+(Number(updateData.cost_processing)||0)+(Number(updateData.cost_transportation)||0);
-    }
+    if(!hasGeography(farm))throw new Error('Complete your farm location in Settings.');
+    const complete=body.status==='complete';
+    const merged={...table[id],...body};
+    if(complete&&(!String(merged.crop_type||'').trim()||['avg_land_size','avg_yield_per_acre','avg_duration_days'].some(k=>!(Number(merged[k])>0))))throw new Error('Complete the crop, land, yield and duration fields.');
+    Object.assign(updateData,mergeCosts(table[id]||{},body,complete),{status:complete?'complete':'draft'});
    }
+
    table[id]={...table[id],...updateData,updated_at:now()};
   }
   return finish(table[id]||(kind==='baseline'?{status:'draft'}:{}));
  }
- if(route==='/listings'&&method==='GET')return finish(data.listings.filter(l=>(!q.has('mine')||l.farmer_id===user?.farmer?.id)&&(!q.get('category')||l.crop_category===q.get('category'))&&(!q.get('search')||`${l.title} ${l.farm_name} ${l.location}`.toLowerCase().includes(q.get('search')!.toLowerCase()))&&(!q.get('min_volume')||l.available_volume>=Number(q.get('min_volume')))&&(!q.get('max_volume')||l.available_volume<=Number(q.get('max_volume')))&&(!q.get('harvest_date_after')||l.harvest_date>q.get('harvest_date_after')!)&&(!q.has('preservative')||!!l.preservative_used===(q.get('preservative')==='true'))));
+ const publicListing=(l:Listing)=>({id:l.id,title:guestLimitFor(l.title)?.name||l.crop_category,crop_category:l.crop_category,price:l.price,sale_unit:l.sale_unit||'kg',harvest_date:l.harvest_date,expiration_date:l.expiration_date,shelf_life_days:l.shelf_life_days,preservative_used:l.preservative_used,description:`Verified ${l.crop_category.toLowerCase()} available through Wirefen.`,image:l.image,verified:true,sustainability_badge:true,agent_score:l.agent_score,traceability:`WF-BATCH-${l.id.slice(0,8)}`,guest_limit:guestLimitFor(l.title)});
+ if(route==='/listings'&&method==='GET'){
+  if(q.has('mine')){account(['Farmer']);return finish(data.listings.filter(l=>l.farmer_id===user?.farmer?.id));}
+  return finish(data.listings.filter(l=>data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified'&&(!q.get('category')||l.crop_category===q.get('category'))&&(!q.get('search')||l.title.toLowerCase().includes(q.get('search')!.toLowerCase()))).map(publicListing));
+ }
  if(route==='/listings'&&method==='POST'){
   const u=account(['Farmer','Admin']),farm=data.farmers.find(f=>f.id===body.farmer_id);if(!farm||u.role!=='Admin'&&farm.user_id!==u.id)throw new Error('Choose a farm you are authorized to manage.');
-  const id=crypto.randomUUID(),crop_category=String(body.crop_category),image=({Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'} as Record<string,string>)[crop_category]||'tomatoes';
-  data.listings.unshift({id,farmer_id:farm.id,title:String(body.title),crop_category,available_volume:Number(body.available_volume),price:Number(body.price),harvest_date:String(body.harvest_date),expiration_date:String(body.expiration_date),shelf_life_days:Number(body.shelf_life_days),preservative_used:body.preservative_used?1:0,description:String(body.description||''),image:`/images/${image}.jpg`,farm_name:farm.farm_name,location:farm.location,verification_status:farm.verification_status,traceability:String(body.traceability||'WF-'+crop_category.slice(0,3).toUpperCase()+'-'+Date.now().toString().slice(-4)),agent_score:Number(body.agent_score)||4.8});delete data.drafts[farm.id];return finish({id});
+  if(!hasGeography(farm))throw new Error('Complete your farm location in Settings.');const id=crypto.randomUUID(),crop_category=String(body.crop_category),image=({Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'} as Record<string,string>)[crop_category]||'tomatoes';
+  data.listings.unshift({id,farmer_id:farm.id,title:String(body.title),crop_category,available_volume:Number(body.available_volume),sale_unit:String(body.sale_unit||guestLimitFor(String(body.title))?.unit||'kg'),price:Number(body.price),harvest_date:String(body.harvest_date),expiration_date:String(body.expiration_date),shelf_life_days:Number(body.shelf_life_days),preservative_used:body.preservative_used?1:0,description:String(body.description||''),image:`/images/${image}.jpg`,farm_name:farm.farm_name,location:farm.location,verification_status:farm.verification_status,traceability:String(body.traceability||'')});delete data.drafts[farm.id];return finish({id});
  }
- if(route.startsWith('/listings/')){const item=data.listings.find(l=>l.id===route.split('/')[2]);if(!item)throw new Error('Sample listing not found.');return finish(item);}
+ if(route.startsWith('/listings/')){const item=data.listings.find(l=>l.id===route.split('/')[2]&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified');if(!item)throw new Error('Sample listing not found.');return finish(publicListing(item));}
  if(route==='/orders'){
   const u=account(method==='GET'?['Buyer','Admin']:['Buyer']);if(method==='GET')return finish(data.orders.filter(o=>u.role==='Admin'||o.buyer_id===u.id));
   const item=data.listings.find(l=>l.id===body.listing_id);if(!item||Number(body.volume)<=0||Number(body.volume)>item.available_volume)throw new Error('Enter a quantity within the available supply.');const id=crypto.randomUUID();

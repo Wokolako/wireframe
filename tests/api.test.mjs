@@ -1,16 +1,94 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-process.env.NODE_ENV='test';process.env.SQLITE_PATH=':memory:';process.env.TWILIO_AUTH_TOKEN='test-token-not-a-secret';process.env.TWILIO_WEBHOOK_URL='https://wirefen.test/api/v1/webhooks/sms/receive';
+process.env.NODE_ENV='test';process.env.SQLITE_PATH=':memory:';process.env.TWILIO_AUTH_TOKEN='test-token-not-a-secret';process.env.TWILIO_WEBHOOK_URL='https://wirefen.test/api/v1/webhooks/sms/receive';process.env.USSD_WEBHOOK_SECRET='test-ussd-secret';
 const {app}=await import('../server/index.mjs');const {db}=await import('../server/db.mjs');const twilio=(await import('twilio')).default;
 let server,base;before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}/api/v1`;});after(async()=>{await new Promise(r=>server.close(r));await db.close();});
 async function call(path,{body,method,cookie,headers}={}){const r=await fetch(base+path,{method:method||(body?'POST':'GET'),headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{}),...headers},body:body?JSON.stringify(body):undefined});return{status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
 const demo=async role=>(await call('/auth/demo',{body:{role}})).cookie;
-test('public catalogue filters preserve numeric, category, and preservative semantics',async()=>{const all=await call('/listings');assert.equal(all.status,200);assert.equal(all.data.length,6);const filtered=await call('/listings?category=Grains&min_volume=10000&max_volume=20000&preservative=false');assert.equal(filtered.data.length,1);assert.equal(filtered.data[0].crop_category,'Grains');assert.equal((await call('/listings?min_volume=100&max_volume=2')).status,400);assert.equal((await call('/listings?harvest_date_after=nonsense')).status,400);});
-test('registration enforces E.164, unique phone, explicit consent, and safe public roles',async()=>{const v={name:'Test Grower',phone:'+27821111111',password:'test-long-password',role:'Farmer',sms_opt_in:true};assert.equal((await call('/auth/register',{body:{...v,phone:'0821111111'}})).status,400);assert.equal((await call('/auth/register',{body:{...v,role:'Admin'}})).status,400);const r=await call('/auth/register',{body:v});assert.equal(r.status,201);assert.ok(r.cookie);assert.ok(r.data.farmer.id);assert.equal((await call('/auth/register',{body:v})).status,409);const consent=await db.get('SELECT * FROM sms_consents WHERE user_id=?',[r.data.id]);assert.equal(consent.opted_in,1);assert.ok(consent.recorded_at);const login=await call('/auth/login',{body:{phone:v.phone,password:v.password}});assert.equal(login.status,200);assert.equal((await call('/auth/login',{body:{phone:v.phone,password:'incorrect'}})).status,401);});
+test('public catalogue exposes verified produce without supplier or stock data',async()=>{const all=await call('/listings');assert.equal(all.status,200);assert.equal(all.data.length,4);const filtered=await call('/listings?category=Grains&preservative=false');assert.equal(filtered.data.length,1);assert.equal(filtered.data[0].crop_category,'Grains');for(const item of all.data)for(const key of ['farm_name','location','available_volume','farmer_id','country','region'])assert.equal(key in item,false);assert.equal((await call('/listings?min_volume=100')).status,400);assert.equal((await call('/listings?harvest_date_after=nonsense')).status,400);});
+test('spreadsheet limits govern guest checkout and private admin stock reporting',async()=>{
+ const tomato=(await call('/listings/produce-1')).data;
+ assert.equal(tomato.guest_limit.max,2);
+ assert.equal(tomato.guest_limit.unit,'kg');
+ const body={listing_id:'produce-1',quantity:2,contact_name:'Guest Buyer',contact_phone:'+265991112200',contact_email:'guest@example.com',delivery_location:'Lilongwe city'};
+ assert.equal((await call('/guest-orders',{body})).status,201);
+ assert.equal((await call('/guest-orders',{body:{...body,quantity:0.5}})).status,409);
+ assert.equal((await call('/guest-orders',{body:{...body,quantity:2.1}})).status,409);
+ assert.equal((await call('/guest-orders',{body:{...body,listing_id:'produce-2',quantity:25}})).status,201);
+ assert.equal((await call('/guest-orders',{body:{...body,listing_id:'produce-2',quantity:25.1}})).status,409);
+ assert.equal((await call('/guest-orders',{body:{...body,listing_id:'produce-4',quantity:1}})).status,404);
+ assert.equal((await call('/admin/listings')).status,401);
+ const admin=await demo('Admin');const report=await call('/admin/listings?country_code=ZA&region=Capricorn%20District',{cookie:admin});
+ assert.equal(report.status,200);assert.ok(report.data.listings.some(l=>l.farm_name==='Mokoena Family Farm'&&l.available_volume>0));
+ assert.ok(report.data.total_available_kg>0);
+ assert.equal((await call('/admin/guest-orders',{cookie:admin})).data.length,2);
+});
+test('basket checkout enforces per-produce limits atomically and staff confirmation updates stock',async()=>{
+ const body={items:[{listing_id:'produce-1',quantity:1},{listing_id:'produce-2',quantity:2}],contact_name:'Basket Buyer',contact_phone:'+265991112250',contact_email:'basket@example.com',delivery_location:'Lilongwe city'};
+ const before=Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume);
+ assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:3},body.items[1]]}})).status,409);
+ assert.equal((await db.get('SELECT COUNT(*) AS count FROM guest_orders WHERE contact_phone=?',[body.contact_phone])).count,0);
+ const placed=await call('/guest-orders/basket',{body});assert.equal(placed.status,201);assert.equal(placed.data.ids.length,2);
+ const admin=await demo('Admin');
+ assert.equal(placed.data.payment_method,'pay_on_delivery');
+ const stored=await db.get('SELECT payment_method,payment_status,unit_price,currency FROM guest_orders WHERE id=?',[placed.data.ids[0]]);
+ assert.equal(stored.payment_method,'pay_on_delivery');assert.equal(stored.payment_status,'unpaid');assert.ok(Number(stored.unit_price)>0);assert.ok(stored.currency);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[0]+'/collect-payment',{cookie:admin,body:{}})).status,409);
+ assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:1.1},body.items[1]]}})).status,409);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[0],{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+ assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[0],{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,200);
+ assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[1],{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[1]+'/collect-payment',{body:{}})).status,401);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[1]+'/collect-payment',{cookie:admin,body:{}})).status,200);
+ assert.equal((await db.get('SELECT payment_status FROM guest_orders WHERE id=?',[placed.data.ids[1]])).payment_status,'paid');
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[1]+'/collect-payment',{cookie:admin,body:{}})).status,409);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.ids[1],{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,409);
+});
+test('guest checkout uses count units from the spreadsheet for verified produce',async()=>{
+ const avocado=(await call('/listings/produce-3')).data;
+ assert.equal(avocado.title,'Avocados');
+ assert.equal(avocado.sale_unit,'fruits');
+ assert.deepEqual(avocado.guest_limit,{name:'Avocados',max:14,unit:'fruits'});
+ const placed=await call('/guest-orders',{body:{listing_id:'produce-3',quantity:14,contact_name:'Fruit Buyer',contact_phone:'+265991112251',contact_email:'fruit@example.com',delivery_location:'Lilongwe city'}});
+ assert.equal(placed.status,201);
+ assert.equal((await db.get('SELECT quantity_unit FROM guest_orders WHERE id=?',[placed.data.id])).quantity_unit,'fruits');
+});
+test('bulk requests require a buyer account and USSD writes require a provider secret',async()=>{
+ const body={frequency:'recurring',produce_type:'Roma tomatoes',target_quantity:1,quantity_unit:'tonnes',delivery_dates:'November 2026',target_price:12,contact_name:'Buyer Name',contact_phone:'+265991112201',contact_email:'buyer@example.com'};
+ assert.equal((await call('/bulk-orders',{body})).status,401);
+ const buyer=await demo('Buyer');assert.equal((await call('/bulk-orders',{cookie:buyer,body})).status,201);
+ assert.equal((await call('/bulk-orders',{cookie:buyer})).data.length,1);
+ const agent=await demo('Agent');assert.equal((await call('/bulk-orders',{cookie:agent})).status,403);
+ const costBefore=await db.get("SELECT * FROM financial_estimates WHERE farmer_id='farm-1'");
+ assert.equal((await call('/ussd/simulate',{body:{phoneNumber:'+27820000001',text:'2*1*2*3*4'}})).status,401);
+ const unsigned=await fetch(base+'/webhooks/ussd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:'+27820000001',text:'2*1*2*3*4'})});
+ assert.equal(unsigned.status,403);
+ assert.deepEqual(await db.get("SELECT * FROM financial_estimates WHERE farmer_id='farm-1'"),costBefore);
+});
+test('SMS farmer registration refuses missing standardized location fields',async()=>{
+ const params={From:'+265991112299',MessageSid:'SM-missing-geo',Body:'JOIN FARMER Missing Location'};
+ const signature=twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN,process.env.TWILIO_WEBHOOK_URL,params);
+ const response=await fetch(base+'/webhooks/sms/receive',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature},body:new URLSearchParams(params)});
+ assert.equal(response.status,200);assert.match(await response.text(),/All location fields are required/);
+ assert.equal(await db.get('SELECT id FROM users WHERE phone=?',[params.From]),undefined);
+});
+test('registration enforces E.164, unique phone, explicit consent, and safe public roles',async()=>{const v={name:'Test Grower',phone:'+27821111111',password:'test-long-password',role:'Farmer',country:'ZA',region:'Test Region',locality:'Ward 12',sms_opt_in:true};assert.equal((await call('/auth/register',{body:{...v,phone:'0821111111'}})).status,400);assert.equal((await call('/auth/register',{body:{...v,role:'Admin'}})).status,400);const r=await call('/auth/register',{body:v});assert.equal(r.status,201);assert.ok(r.cookie);assert.ok(r.data.farmer.id);assert.equal((await call('/auth/register',{body:v})).status,409);const consent=await db.get('SELECT * FROM sms_consents WHERE user_id=?',[r.data.id]);assert.equal(consent.opted_in,1);assert.ok(consent.recorded_at);const login=await call('/auth/login',{body:{phone:v.phone,password:v.password}});assert.equal(login.status,200);assert.equal((await call('/auth/login',{body:{phone:v.phone,password:'incorrect'}})).status,401);});
 test('RBAC and owner checks prevent unauthorized reads and writes',async()=>{assert.equal((await call('/farmers/farm-1/baseline')).status,401);const buyer=await demo('Buyer'),farmer=await demo('Farmer');assert.equal((await call('/farmers/farm-1/baseline',{cookie:buyer})).status,403);assert.equal((await call('/farmers/farm-2/baseline',{cookie:farmer})).status,403);assert.equal((await call('/farmers',{cookie:farmer})).status,403);assert.equal((await call('/listings',{cookie:buyer,body:{}})).status,403);const admin=await demo('Admin');assert.equal((await call('/farmers',{cookie:admin})).status,200);});
-test('baseline PATCH preserves earlier fields and only completes validated data',async()=>{const cookie=await demo('Farmer');assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{crop_type:'Tomatoes',avg_land_size:12,status:'draft'}})).status,200);assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{avg_yield_per_acre:3500}})).data.crop_type,'Tomatoes');assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{status:'complete'}})).status,400);const final=await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{avg_duration_days:90,avg_production_cost:10000,status:'complete'}});assert.equal(final.data.status,'complete');assert.equal(final.data.avg_land_size,12);});
+test('baseline PATCH preserves earlier fields and only completes validated data',async()=>{const cookie=await demo('Farmer');assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{crop_type:'Tomatoes',avg_land_size:12,status:'draft'}})).status,200);assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{avg_yield_per_acre:3500}})).data.crop_type,'Tomatoes');assert.equal((await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{status:'complete'}})).status,400);const final=await call('/farmers/farm-1/baseline',{cookie,method:'PATCH',body:{avg_duration_days:90,cost_fertilizer_seeds:4000,cost_labor:3000,cost_processing:2000,cost_transportation:1000,status:'complete'}});assert.equal(final.data.status,'complete');assert.equal(final.data.avg_land_size,12);});
 test('listing drafts support partial server saves with ownership enforcement',async()=>{const cookie=await demo('Farmer');await call('/farmers/farm-1/listing-draft',{cookie,method:'PATCH',body:{title:'Draft tomatoes'}});const update=await call('/farmers/farm-1/listing-draft',{cookie,method:'PATCH',body:{price:'12'}});assert.equal(update.data.title,'Draft tomatoes');assert.equal((await call('/farmers/farm-2/listing-draft',{cookie})).status,403);});
 test('listings validate dates, volumes, and farm ownership',async()=>{const cookie=await demo('Farmer');const v={farmer_id:'farm-1',title:'Fresh carrots',crop_category:'Vegetables',available_volume:300,price:12,harvest_date:'2099-01-01',expiration_date:'2099-01-10',shelf_life_days:9,preservative_used:false};assert.equal((await call('/listings',{cookie,body:{...v,farmer_id:'farm-2'}})).status,403);assert.equal((await call('/listings',{cookie,body:{...v,available_volume:-1}})).status,400);assert.equal((await call('/listings',{cookie,body:{...v,expiration_date:'2098-12-01'}})).status,400);assert.equal((await call('/listings',{cookie,body:v})).status,201);});
+test('public listing text cannot expose a supplier name or origin',async()=>{
+ const farmer=await demo('Farmer');
+ const body={farmer_id:'farm-1',title:'Mokoena Family Farm Limpopo tomatoes',crop_category:'Vegetables',available_volume:50,sale_unit:'kg',price:12,harvest_date:'2099-01-01',expiration_date:'2099-01-10',shelf_life_days:9,preservative_used:false,description:'Grown at Mokoena Family Farm in Limpopo.'};
+ const created=await call('/listings',{cookie:farmer,body});assert.equal(created.status,201);
+ const publicView=await call('/listings/'+created.data.id);assert.equal(publicView.status,200);
+ assert.equal(publicView.data.title,'Tomatoes');
+ assert.doesNotMatch(JSON.stringify(publicView.data),/Mokoena|Limpopo|available_volume|farm_name/i);
+ assert.equal((await call('/listings?search=Mokoena')).data.length,0);
+ assert.equal((await call('/listings',{cookie:farmer,method:'POST',body:{...body,title:'Cabbage',sale_unit:'kg'}})).status,400);
+});
 test('buyer inquiry is persisted and admin can progress its status',async()=>{const cookie=await demo('Buyer');const body={listing_id:'produce-1',volume:100,delivery_location:'Johannesburg',notes:'Collection preferred'};assert.equal((await call('/orders',{cookie,body:{...body,volume:100000}})).status,400);const create=await call('/orders',{cookie,body});assert.equal(create.status,201);assert.equal((await call('/orders/'+create.data.id,{cookie,method:'PATCH',body:{status:'Closed'}})).status,403);const admin=await demo('Admin');assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,200);assert.equal((await call('/orders',{cookie})).data[0].status,'Contacted');});
 test('cross-origin writes and revoked sessions are rejected',async()=>{const cookie=await demo('Buyer');assert.equal((await call('/account/consent',{cookie,method:'PATCH',body:{sms_opt_in:true},headers:{Origin:'https://attacker.example'}})).status,403);await call('/auth/logout',{cookie,body:{}});assert.equal((await call('/orders',{cookie})).status,401);});
 test('SMS rejects forged signatures, records STOP/START, routes yield, and deduplicates',async()=>{async function sms(body,signed=true){const params={From:'+27820000001',MessageSid:'SM'+Math.random(),...body};const signature=twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN,process.env.TWILIO_WEBHOOK_URL,params);const r=await fetch(base+'/webhooks/sms/receive',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signed?signature:'forged'},body:new URLSearchParams(params)});return{status:r.status,text:await r.text()};}assert.equal((await sms({Body:'START'},false)).status,403);assert.match((await sms({Body:'START'})).text,/enabled/);assert.match((await sms({Body:'BASELINE'})).text,/kilograms/);assert.match((await sms({Body:'invalid'})).text,/positive/);const sid='SM-dedup';assert.match((await sms({Body:'500',MessageSid:sid})).text,/saved/);assert.equal((await db.get('SELECT avg_yield_per_acre FROM historical_baselines WHERE farmer_id=?',['farm-1'])).avg_yield_per_acre,500);assert.doesNotMatch((await sms({Body:'500',MessageSid:sid})).text,/<Message>/);assert.match((await sms({Body:'STOP'})).text,/stopped/);assert.equal((await db.get('SELECT sms_opt_in FROM users WHERE id=?',['farmer-1'])).sms_opt_in,0);});
@@ -41,7 +119,7 @@ test('Appendix B: Form 1 Guided Breakdown automatically aggregates costs via API
  assert.match(q4.text,/Transportation/i);
  const qFinal=await sms({Body:'2000'});
  assert.match(qFinal.text,/Total Estimated Cost: ZAR 15000/);
- const saved=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',['farm-1']);
+ const saved=await db.get('SELECT * FROM financial_estimates WHERE farmer_id=?',['farm-1']);
  assert.equal(saved.cost_fertilizer_seeds,4500);
  assert.equal(saved.cost_labor,5500);
  assert.equal(saved.cost_processing,3000);
@@ -76,7 +154,7 @@ test('Appendix C: RBAC enforces financial data isolation and strict role boundar
   assert.equal(item.cost_transportation,undefined);
   assert.equal(item.avg_production_cost,undefined);
   assert.ok('price' in item);
-  assert.ok('available_volume' in item);
+  assert.equal('available_volume' in item,false);
   assert.ok('traceability' in item);
   assert.ok('agent_score' in item);
  }
@@ -84,10 +162,11 @@ test('Appendix C: RBAC enforces financial data isolation and strict role boundar
  // 3. Agents: NO ACCESS to farmer financial data, only physical verification requirements
  const agentBaseline=await call('/farmers/farm-1/baseline',{cookie:agent});
  assert.equal(agentBaseline.status,403);
- const agentAnalytics=await call('/analytics/financial',{cookie:agent});
+ const agentAnalytics=await call('/admin/financial-analytics',{cookie:agent});
  assert.equal(agentAnalytics.status,403);
 
- const verifs=await call('/verifications',{cookie:agent});
+ assert.equal((await call('/admin/verifications',{cookie:admin,body:{listing_id:'produce-1',agent_id:'agent-1'}})).status,200);
+ const verifs=await call('/agent/verifications',{cookie:agent});
  assert.equal(verifs.status,200);
  assert.ok(verifs.data.length>0);
  const v1=verifs.data[0];
@@ -95,24 +174,24 @@ test('Appendix C: RBAC enforces financial data isolation and strict role boundar
  assert.ok('location' in v1);
  assert.ok('country' in v1);
  assert.ok('region' in v1);
- assert.ok('farm_size' in v1);
- assert.ok('verification_status' in v1);
+ assert.ok('available_volume' in v1);
+ assert.ok('status' in v1);
  assert.equal(v1.cost_fertilizer_seeds,undefined);
  assert.equal(v1.avg_production_cost,undefined);
 
- const patchVerif=await call(`/verifications/${v1.id}`,{cookie:agent,method:'PATCH',body:{verification_status:'Verified'}});
+ const patchVerif=await call(`/agent/verifications/${v1.listing_id}`,{cookie:agent,method:'PATCH',body:{crop_confirmed:true,volume_confirmed:true,location_confirmed:true,harvest_confirmed:true}});
  assert.equal(patchVerif.status,200);
- assert.equal(patchVerif.data.verification_status,'Verified');
+ assert.equal(patchVerif.data.status,'verified');
+ assert.equal(patchVerif.data.score,100);
 
  // 4. Platform Admins: Access to aggregated financial data for platform analytics
- const buyerAnalytics=await call('/analytics/financial',{cookie:buyer});
+ const buyerAnalytics=await call('/admin/financial-analytics',{cookie:buyer});
  assert.equal(buyerAnalytics.status,403);
- const adminAnalytics=await call('/analytics/financial',{cookie:admin});
+ const adminAnalytics=await call('/admin/financial-analytics',{cookie:admin});
  assert.equal(adminAnalytics.status,200);
- assert.ok(Array.isArray(adminAnalytics.data.regional));
- assert.ok(Array.isArray(adminAnalytics.data.by_crop));
- assert.ok('summary' in adminAnalytics.data);
- assert.ok(adminAnalytics.data.summary.total_submissions>=1);
+ assert.ok(Array.isArray(adminAnalytics.data.regions));
+ assert.equal(adminAnalytics.data.minimum_group_size,5);
+ assert.ok(adminAnalytics.data.regions.every(region=>region.farmer_count>=5));
 });
 
 test('Direct payment enables Malawian bank account & mobile money checkout with RBAC',async()=>{
@@ -163,9 +242,10 @@ test('Direct payment enables Malawian bank account & mobile money checkout with 
 
 test('USSD *211# menu provides parallel signup, cost breakdown, and live market prices',async()=>{
  const phone='+265991112233';
+ const admin=await demo('Admin');
 
  // 1. Initial dial *211# for unauthenticated Malawian user
- const sim=async text=>call('/ussd/simulate',{body:{phoneNumber:phone,text}});
+ const sim=async text=>call('/ussd/simulate',{cookie:admin,body:{phoneNumber:phone,text}});
 
  const step0=await sim('');
  assert.equal(step0.status,200);
@@ -226,13 +306,16 @@ test('USSD *211# menu provides parallel signup, cost breakdown, and live market 
  assert.match(costSaved.data.response,/Costs saved!/);
  assert.match(costSaved.data.response,/Total Estimated Cost: MWK 220000/);
 
- const baseline=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[farmProfile.id]);
+ const baseline=await db.get('SELECT * FROM financial_estimates WHERE farmer_id=?',[farmProfile.id]);
  assert.ok(baseline);
  assert.equal(baseline.cost_fertilizer_seeds,120000);
  assert.equal(baseline.cost_labor,60000);
  assert.equal(baseline.cost_processing,25000);
  assert.equal(baseline.cost_transportation,15000);
  assert.equal(baseline.avg_production_cost,220000);
+ const invalid=await sim('2*-1*60000*25000*15000');
+ assert.match(invalid.data.response,/Nothing was saved/);
+ assert.deepEqual(await db.get('SELECT * FROM financial_estimates WHERE farmer_id=?',[farmProfile.id]),baseline);
 });
 
 test('SMS JOIN command registers farmer with Appendix A standardized geography',async()=>{

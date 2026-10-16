@@ -1,9 +1,11 @@
+import {normalizeGeography} from '../shared/geography.mjs';
+import {guestLimitFor} from '../shared/guest-limits.mjs';
 import { randomUUID, scryptSync, randomBytes } from 'node:crypto';
 export const hashPassword = password => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 export async function seed(db) {
  if(await db.get('SELECT id FROM users LIMIT 1')) return;
  const now = new Date().toISOString();
- const users = [['farmer-1','Thandi Mokoena','+27820000001','Farmer'],['farmer-2','Pieter van der Merwe','+27820000002','Farmer'],['farmer-3','Nomsa Dlamini','+27820000003','Farmer'],['buyer-1','Alex Morgan','+27820000004','Buyer'],['admin-1','Wirefen Operations','+27820000005','Admin'],['agent-1','Kuda Moyo (Field Agent)','+27820000006','Agent']];
+ const users = [['farmer-1','Thandi Mokoena','+27820000001','Farmer'],['farmer-2','Pieter van der Merwe','+27820000002','Farmer'],['farmer-3','Nomsa Dlamini','+27820000003','Farmer'],['buyer-1','Alex Morgan','+27820000004','Buyer'],['admin-1','Wirefen Operations','+27820000005','Admin'],['agent-1','Sample Field Agent','+27820000006','Agent']];
  for(const [id,name,phone,role] of users) await db.run('INSERT INTO users (id,name,phone,password_hash,role,created_at) VALUES (?,?,?,?,?,?)',[id,name,phone,hashPassword(randomUUID()),role,now]);
  const seedFarmers = [
   ['farm-1','farmer-1','Mokoena Family Farm','South Africa','Capricorn District','Capricorn District','Polokwane Ward 12','Polokwane Ward 12','Polokwane Ward 12, Capricorn District, South Africa',24,'Verified'],
@@ -11,6 +13,8 @@ export async function seed(db) {
   ['farm-3','farmer-3','Green Roots Cooperative','South Africa','uMgungundlovu','uMgungundlovu','Msunduzi Ward 22','Msunduzi Ward 22','Msunduzi Ward 22, uMgungundlovu, South Africa',42,'Pending']
  ];
  for(const row of seedFarmers) await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location,farm_size,verification_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)',row);
+ for(const row of seedFarmers){const g=normalizeGeography({country:row[3],region:row[4],locality:row[6]});await db.run('UPDATE farmer_profiles SET country_code=?,region_key=?,location_key=? WHERE id=?',[g.country_code,g.region_key,g.location_key,row[0]]);}
+ await db.run('INSERT INTO user_permissions (user_id,permission) VALUES (?,?)',['admin-1','financial_analytics']);
  const date = offset => new Date(Date.now()+offset*86400000).toISOString().slice(0,10);
  const products = [
  ['Roma tomatoes','Vegetables',2500,12.5,'farm-1','tomatoes',-1,10,'Firm, sun-ripened Roma tomatoes, sorted and packed in reusable crates. Ideal for fresh markets and food service.','WF-ZA-LP-2026-TOM01',4.9],
@@ -20,5 +24,5 @@ export async function seed(db) {
  ['Green cabbage','Vegetables',3600,6.8,'farm-3','cabbage',0,14,'Crisp green cabbages with tightly packed leaves. Supplied whole in bulk crates.','WF-ZA-KZN-2026-CAB05',4.5],
  ['Red kidney beans','Legumes',6000,24,'farm-2','beans',-5,180,'Dried red kidney beans, sorted for consistent quality. Suitable for wholesalers and processors.','WF-ZA-WC-2026-BN06',4.8]
  ];
- for(let i=0;i<products.length;i++){ const [title,cat,vol,price,farm,img,harvest,life,desc,trace,score]=products[i]; await db.run('INSERT INTO listings (id,farmer_id,title,crop_category,available_volume,price,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,agent_score,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[`produce-${i+1}`,farm,title,cat,vol,price,date(harvest),date(harvest+life),life,0,desc,`/images/${img}.jpg`,trace,score,now]); }
+ for(let i=0;i<products.length;i++){ const [title,cat,vol,price,farm,img,harvest,life,desc,trace,score]=products[i]; await db.run('INSERT INTO listings (id,farmer_id,title,crop_category,available_volume,sale_unit,price,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,agent_score,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[`produce-${i+1}`,farm,title,cat,vol,guestLimitFor(title)?.unit||'kg',price,date(harvest),date(harvest+life),life,0,desc,`/images/${img}.jpg`,trace,score,now]); }
 }

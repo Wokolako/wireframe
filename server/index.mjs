@@ -1,3 +1,8 @@
+import {normalizeGeography,hasGeography} from '../shared/geography.mjs';
+import {guestLimitFor,guestLimits,loadLimitsFromDb} from '../shared/guest-limits.mjs';
+import {parseCost,costFields} from '../shared/finance.mjs';
+import {readBaseline,saveBaseline,financialRoutes} from './financial.mjs';
+import {verificationRoutes} from './verification.mjs';
 import express from 'express';
 import {pwaRouter} from './pwa.mjs';
 import {clerkMiddleware,getAuth} from '@clerk/express';
@@ -15,6 +20,7 @@ import { seed, hashPassword } from './seed.mjs';
 import { getExchangeRates } from './exchange.mjs';
 
 await initDb();
+await loadLimitsFromDb(db);
 const production = process.env.NODE_ENV === 'production';
 const clerkKey=process.env.CLERK_PUBLISHABLE_KEY||process.env.VITE_CLERK_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const clerkEnabled=!!(clerkKey&&process.env.CLERK_SECRET_KEY);
@@ -55,13 +61,13 @@ const phone=z.string().regex(/^\+[1-9]\d{7,14}$/,'Use an international phone num
 app.get('/api/v1/exchange-rates',rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false}),async(req,res)=>res.json(await getExchangeRates(process.env.CURRENCY || 'ZAR')));
 app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'South Africa (sample market)',currency:process.env.CURRENCY || 'ZAR',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}));
 app.post('/api/v1/auth/register',async(req,res)=>{
- const v=z.object({name:z.string().trim().min(2).max(100),phone,password:z.string().min(10).max(128),role:z.enum(['Farmer','Buyer','Agent']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).optional(),country:z.string().trim().max(100).optional(),region:z.string().trim().max(100).optional(),district:z.string().trim().max(100).optional(),locality:z.string().trim().max(100).optional(),ward:z.string().trim().max(100).optional(),location:z.string().trim().max(100).optional()}).parse(req.body);
+ const v=z.object({name:z.string().trim().min(2).max(100),phone,password:z.string().min(10).max(128),role:z.enum(['Farmer','Buyer']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).optional(),country:z.string().trim().max(100).optional(),region:z.string().trim().max(100).optional(),district:z.string().trim().max(100).optional(),locality:z.string().trim().max(100).optional(),ward:z.string().trim().max(100).optional(),location:z.string().trim().max(100).optional()}).parse(req.body);
+ let geography;if(v.role==='Farmer'){try{geography=normalizeGeography(v);}catch(e){throw fail(400,e.message);}}
  if(await db.get('SELECT id FROM users WHERE phone=?',[v.phone])) throw fail(409,'This phone number already has an account. Sign in instead.');
  const id=randomUUID(),stamp=now(); await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,v.name,v.phone,hashPassword(v.password),v.role,+v.sms_opt_in,v.sms_opt_in?stamp:null,stamp]);
  if(v.role==='Farmer'){
-  const country=v.country||'South Africa',region=v.region||v.district||v.location||'Not specified',locality=v.locality||v.ward||v.location||'Not specified';
-  const location=v.location||[locality,region,country].filter(Boolean).join(', ');
-  await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location) VALUES (?,?,?,?,?,?,?,?,?)',[randomUUID(),id,v.farm_name||`${v.name}'s farm`,country,region,v.district||region,locality,v.ward||locality,location]);
+  const g=geography;
+  await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,country_code,region,district,locality,ward,region_key,location_key,location) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[randomUUID(),id,v.farm_name||`${v.name}'s farm`,g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location]);
  }
  await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,+v.sms_opt_in,stamp,'registration']);
  res.status(201).json(await session(res,await db.get('SELECT * FROM users WHERE id=?',[id])));
@@ -73,38 +79,154 @@ app.post('/api/v1/auth/logout',async(req,res)=>{if(req.cookies.wirefen_session) 
 app.patch('/api/v1/account/consent',permit('Farmer','Buyer','Admin','Agent'),async(req,res)=>{const {sms_opt_in}=z.object({sms_opt_in:z.boolean()}).parse(req.body);await db.run('UPDATE users SET sms_opt_in=?,sms_opt_in_at=? WHERE id=?',[+sms_opt_in,sms_opt_in?now():null,req.user.id]);await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),req.user.id,+sms_opt_in,now(),'account']);res.json({ok:true});});
 async function ownFarm(req,id){const f=await db.get('SELECT * FROM farmer_profiles WHERE id=?',[id]);if(!f)throw fail(404,'Farmer not found.');if(req.user.role!=='Admin'&&f.user_id!==req.user.id)throw fail(403,'You can only edit your own farm.');return f;}
 app.get('/api/v1/farmers',permit('Admin'),async(req,res)=>res.json(await db.all('SELECT f.*,u.name,u.phone,b.status AS baseline_status FROM farmer_profiles f JOIN users u ON u.id=f.user_id LEFT JOIN historical_baselines b ON b.farmer_id=f.id ORDER BY f.farm_name')));
-const baseline=z.object({crop_type:z.string().trim().min(2).max(80),avg_land_size:z.number().positive().max(1e7),avg_yield_per_acre:z.number().positive().max(1e9),avg_duration_days:z.number().int().positive().max(3650),cost_fertilizer_seeds:z.number().nonnegative().max(1e12).nullish(),cost_labor:z.number().nonnegative().max(1e12).nullish(),cost_processing:z.number().nonnegative().max(1e12).nullish(),cost_transportation:z.number().nonnegative().max(1e12).nullish(),avg_production_cost:z.number().nonnegative().max(1e12)});
-app.get('/api/v1/farmers/:id/baseline',permit('Farmer','Admin'),async(req,res)=>{await ownFarm(req,req.params.id);res.json(await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[req.params.id])||{status:'draft'});});
-async function saveBaseline(req,res){await ownFarm(req,req.params.id);const incoming=baseline.partial().extend({status:z.enum(['draft','complete']).optional()}).parse(req.body);const old=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[req.params.id])||{};const v={...old,...incoming};const hasBreakdown=[v.cost_fertilizer_seeds,v.cost_labor,v.cost_processing,v.cost_transportation].some(x=>x!==undefined&&x!==null);if(hasBreakdown){v.avg_production_cost=(Number(v.cost_fertilizer_seeds)||0)+(Number(v.cost_labor)||0)+(Number(v.cost_processing)||0)+(Number(v.cost_transportation)||0);}if(v.status==='complete')baseline.parse(v);await db.run('INSERT INTO historical_baselines (farmer_id,crop_type,avg_land_size,avg_yield_per_acre,avg_duration_days,cost_fertilizer_seeds,cost_labor,cost_processing,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(farmer_id) DO UPDATE SET crop_type=excluded.crop_type,avg_land_size=excluded.avg_land_size,avg_yield_per_acre=excluded.avg_yield_per_acre,avg_duration_days=excluded.avg_duration_days,cost_fertilizer_seeds=excluded.cost_fertilizer_seeds,cost_labor=excluded.cost_labor,cost_processing=excluded.cost_processing,cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status=excluded.status,updated_at=excluded.updated_at',[req.params.id,v.crop_type??null,v.avg_land_size??null,v.avg_yield_per_acre??null,v.avg_duration_days??null,v.cost_fertilizer_seeds??null,v.cost_labor??null,v.cost_processing??null,v.cost_transportation??null,v.avg_production_cost??null,v.status||'draft',now()]);res.json(await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[req.params.id]));}
-app.post('/api/v1/farmers/:id/baseline',permit('Farmer','Admin'),saveBaseline);app.patch('/api/v1/farmers/:id/baseline',permit('Farmer','Admin'),saveBaseline);
+app.get('/api/v1/farmers/:id/baseline',permit('Farmer'),async(req,res)=>{await ownFarm(req,req.params.id);res.json(await readBaseline(db,req.params.id));});
+async function saveFinancial(req,res){await ownFarm(req,req.params.id);res.json(await saveBaseline(db,req.params.id,req.body));}
+app.post('/api/v1/farmers/:id/baseline',permit('Farmer'),saveFinancial);
+app.patch('/api/v1/farmers/:id/baseline',permit('Farmer'),saveFinancial);
+app.patch('/api/v1/account/location',permit('Farmer'),async(req,res)=>{
+ let g;try{g=normalizeGeography(req.body);}catch(e){throw fail(400,e.message);}
+ await db.run('UPDATE farmer_profiles SET country=?,country_code=?,region=?,district=?,locality=?,ward=?,region_key=?,location_key=?,location=? WHERE user_id=?',[g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location,req.user.id]);
+ res.json(await publicUser(req.user));
+});
+financialRoutes(app,db,permit);verificationRoutes(app,db,permit);
 app.get('/api/v1/farmers/:id/listing-draft',permit('Farmer','Admin'),async(req,res)=>{await ownFarm(req,req.params.id);const row=await db.get('SELECT payload FROM listing_drafts WHERE farmer_id=?',[req.params.id]);res.json(row?JSON.parse(row.payload):{});});
 app.patch('/api/v1/farmers/:id/listing-draft',permit('Farmer','Admin'),async(req,res)=>{await ownFarm(req,req.params.id);const schema=z.object({title:z.string().max(100).optional(),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes']).optional(),available_volume:z.string().max(20).optional(),price:z.string().max(20).optional(),harvest_date:z.string().max(10).optional(),expiration_date:z.string().max(10).optional(),shelf_life_days:z.string().max(10).optional(),preservative_used:z.enum(['true','false']).optional(),description:z.string().max(2000).optional()});const patch=schema.parse(req.body);const old=await db.get('SELECT payload FROM listing_drafts WHERE farmer_id=?',[req.params.id]);const value={...(old?JSON.parse(old.payload):{}),...patch};await db.run('INSERT INTO listing_drafts VALUES (?,?,?) ON CONFLICT(farmer_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[req.params.id,JSON.stringify(value),now()]);res.json(value);});
 const date=z.iso.date();
-const listing=z.object({farmer_id:z.string().min(1),title:z.string().trim().min(3).max(100),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes']),available_volume:z.number().positive().max(1e9),price:z.number().positive().max(1e9),harvest_date:date,expiration_date:date,shelf_life_days:z.number().int().positive().max(3650),preservative_used:z.boolean(),description:z.string().trim().max(2000).default(''),traceability:z.string().trim().max(100).default(''),agent_score:z.number().min(0).max(5).default(0)}).refine(v=>v.expiration_date>=v.harvest_date,{message:'Expiry must be on or after harvest.',path:['expiration_date']});
-const joinListing='SELECT l.*,f.farm_name,f.location,f.verification_status FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id';
+const listing=z.object({farmer_id:z.string().min(1),title:z.string().trim().min(3).max(100),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes']),available_volume:z.number().positive().max(1e9),sale_unit:z.enum(['kg','cobs','heads','bundles','fruits','bunches','canes']).default('kg'),price:z.number().positive().max(1e9),harvest_date:date,expiration_date:date,shelf_life_days:z.number().int().positive().max(3650),preservative_used:z.boolean(),description:z.string().trim().max(2000).default(''),traceability:z.string().trim().max(100).default('')}).refine(v=>v.expiration_date>=v.harvest_date,{message:'Expiry must be on or after harvest.',path:['expiration_date']}).refine(v=>!guestLimitFor(v.title)||guestLimitFor(v.title).unit===v.sale_unit,{message:'Sale unit must match the household limit unit for this produce.',path:['sale_unit']});
+const joinListing="SELECT l.*,f.farm_name,f.location,f.country,f.country_code,f.region,f.locality,f.verification_status,v.score AS agent_score,v.status AS agent_verification_status,v.updated_at AS verified_at FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id LEFT JOIN listing_verifications v ON v.listing_id=l.id";
+const storefrontListing=l=>({id:l.id,title:guestLimitFor(l.title)?.name||l.crop_category,crop_category:l.crop_category,price:l.price,sale_unit:l.sale_unit||'kg',
+ harvest_date:l.harvest_date,expiration_date:l.expiration_date,shelf_life_days:l.shelf_life_days,
+ preservative_used:l.preservative_used,description:`Verified ${l.crop_category.toLowerCase()} available through Wirefen.`,image:l.image,
+ verified:true,sustainability_badge:true,agent_score:l.agent_score,traceability:`WF-BATCH-${l.id.slice(0,8)}`,
+ guest_limit:guestLimitFor(l.title)});
+app.get('/api/v1/guest-limits',async(req,res)=>{
+ try{
+  const rows=await db.all('SELECT produce_item AS name,max_quantity AS max,unit,category,shelf_life,shelf_life_days,requirement FROM guest_order_limits ORDER BY category,produce_item');
+  if(rows&&rows.length>0) return res.json(rows.map(r=>({...r,max:Number(r.max)})));
+ } catch{/* table may not exist — fall through to in-memory */}
+ res.json(guestLimits);
+});
 app.get('/api/v1/listings',async(req,res)=>{
  const q=z.object({category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes']).optional(),min_volume:z.coerce.number().nonnegative().optional(),max_volume:z.coerce.number().nonnegative().optional(),harvest_date_after:date.optional(),preservative:z.enum(['true','false']).optional(),search:z.string().max(100).optional(),mine:z.enum(['true']).optional()}).parse(req.query);
  if(q.min_volume!=null&&q.max_volume!=null&&q.min_volume>q.max_volume)throw fail(400,'Minimum volume must not exceed maximum volume.');
  let where=" WHERE l.status='published' AND l.expiration_date>=?",params=[now().slice(0,10)];
  if(q.mine){if(!req.user)throw fail(401,'Sign in to view your listings.');where=' WHERE f.user_id=?';params=[req.user.id];}
+ else where+=" AND f.verification_status='Verified'";
+ if(!q.mine&&(q.min_volume!==undefined||q.max_volume!==undefined))throw fail(400,'Stock filters are available to staff only.');
  for(const [key,op,val] of [['crop_category','=',q.category],['available_volume','>=',q.min_volume],['available_volume','<=',q.max_volume],['harvest_date','>',q.harvest_date_after],['preservative_used','=',q.preservative===undefined?undefined:+(q.preservative==='true')]]) if(val!==undefined){where+=` AND l.${key}${op}?`;params.push(val);}
- if(q.search){where+=' AND (LOWER(l.title) LIKE ? OR LOWER(f.farm_name) LIKE ? OR LOWER(f.location) LIKE ?)';params.push(...Array(3).fill(`%${q.search.toLowerCase()}%`));}
- res.json(await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT 200',params));
+ if(q.search&&q.mine){where+=' AND LOWER(l.title) LIKE ?';params.push(`%${q.search.toLowerCase()}%`);}
+ const rows=await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT 200',params);
+ const publicRows=q.mine?[]:rows.map(storefrontListing);
+ res.json(q.mine?rows:q.search?publicRows.filter(row=>row.title.toLowerCase().includes(q.search.toLowerCase())):publicRows);
 });
-app.get('/api/v1/listings/:id',async(req,res)=>{const row=await db.get(joinListing+" WHERE l.id=? AND l.status='published'",[req.params.id]);if(!row)throw fail(404,'Listing not found.');res.json(row);});
-app.post('/api/v1/listings',permit('Farmer','Admin'),async(req,res)=>{const v=listing.parse(req.body);await ownFarm(req,v.farmer_id);if(v.expiration_date<now().slice(0,10))throw fail(400,'Expiration date must not be in the past.');const id=randomUUID();const image={Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'}[v.crop_category];await db.run('INSERT INTO listings (id,farmer_id,title,crop_category,available_volume,price,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,agent_score,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,v.farmer_id,v.title,v.crop_category,v.available_volume,v.price,v.harvest_date,v.expiration_date,v.shelf_life_days,+v.preservative_used,v.description,`/images/${image}.jpg`,v.traceability||'',v.agent_score||0,now()]);await db.run('DELETE FROM listing_drafts WHERE farmer_id=?',[v.farmer_id]);res.status(201).json({id});});
-app.get('/api/v1/verifications',permit('Agent','Admin'),async(req,res)=>res.json(await db.all('SELECT f.id,f.farm_name,f.country,f.region,f.district,f.locality,f.ward,f.location,f.farm_size,f.verification_status,u.name AS farmer_name,u.phone AS contact_phone FROM farmer_profiles f JOIN users u ON u.id=f.user_id ORDER BY f.farm_name')));
-app.patch('/api/v1/verifications/:id',permit('Agent','Admin'),async(req,res)=>{const {verification_status}=z.object({verification_status:z.enum(['Verified','Pending','Unverified'])}).parse(req.body);if(!await db.get('SELECT id FROM farmer_profiles WHERE id=?',[req.params.id]))throw fail(404,'Farmer not found.');await db.run('UPDATE farmer_profiles SET verification_status=? WHERE id=?',[verification_status,req.params.id]);res.json({ok:true,id:req.params.id,verification_status});});
-app.get('/api/v1/analytics/financial',permit('Admin'),async(req,res)=>{
- const regional=await db.all(`SELECT f.country,COALESCE(NULLIF(f.region,''),'Unspecified') AS region,COUNT(b.farmer_id) AS total_baselines,ROUND(AVG(b.cost_fertilizer_seeds),2) AS avg_fertilizer_seeds,ROUND(AVG(b.cost_labor),2) AS avg_labor,ROUND(AVG(b.cost_processing),2) AS avg_processing,ROUND(AVG(b.cost_transportation),2) AS avg_transportation,ROUND(AVG(b.avg_production_cost),2) AS avg_total_production_cost,ROUND(AVG(b.avg_land_size),2) AS avg_land_size,ROUND(AVG(b.avg_yield_per_acre),2) AS avg_yield_per_acre FROM historical_baselines b JOIN farmer_profiles f ON f.id=b.farmer_id GROUP BY f.country,f.region ORDER BY f.country,f.region`);
- const by_crop=await db.all(`SELECT COALESCE(b.crop_type,'Other') AS crop_type,COUNT(b.farmer_id) AS total_baselines,ROUND(AVG(b.avg_production_cost),2) AS avg_production_cost,ROUND(AVG(b.avg_yield_per_acre),2) AS avg_yield_per_acre FROM historical_baselines b WHERE b.crop_type IS NOT NULL AND b.crop_type!='' GROUP BY b.crop_type ORDER BY total_baselines DESC`);
- const summary=await db.get(`SELECT COUNT(b.farmer_id) AS total_submissions,ROUND(AVG(b.avg_production_cost),2) AS overall_avg_cost,ROUND(SUM(b.avg_production_cost),2) AS overall_total_cost FROM historical_baselines b`);
- res.json({regional,by_crop,summary:summary||{total_submissions:0,overall_avg_cost:0,overall_total_cost:0}});
+app.get('/api/v1/listings/:id',async(req,res)=>{const row=await db.get(joinListing+" WHERE l.id=? AND l.status='published' AND f.verification_status='Verified'",[req.params.id]);if(!row)throw fail(404,'Listing not found.');res.json(storefrontListing(row));});
+app.get('/api/v1/admin/listings',permit('Admin'),async(req,res)=>{
+ const {country_code,region,locality}=z.object({country_code:z.string().max(2).optional(),region:z.string().max(100).optional(),locality:z.string().max(100).optional()}).parse(req.query);
+ let where=' WHERE 1=1',params=[];
+ for(const [field,value] of [['country_code',country_code],['region',region],['locality',locality]])if(value){where+=` AND LOWER(f.${field})=LOWER(?)`;params.push(value);}
+ const totals=await db.get("SELECT COUNT(*) AS listing_count,COALESCE(SUM(CASE WHEN l.sale_unit='kg' THEN l.available_volume ELSE 0 END),0) AS total_available_kg FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id"+where,params);
+ const stock_by_unit=await db.all('SELECT l.sale_unit AS unit,COUNT(*) AS listing_count,SUM(l.available_volume) AS available FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id'+where+' GROUP BY l.sale_unit ORDER BY l.sale_unit',params);
+ const rows=await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT 500',params);
+ res.json({listing_count:Number(totals.listing_count),total_available_kg:Number(totals.total_available_kg),stock_by_unit:stock_by_unit.map(row=>({...row,available:Number(row.available),listing_count:Number(row.listing_count)})),listings:rows});
+});
+app.post('/api/v1/listings',permit('Farmer','Admin'),async(req,res)=>{const v=listing.parse(req.body);const farm=await ownFarm(req,v.farmer_id);if(!hasGeography(farm))throw fail(409,'Complete the farmer location in Settings before publishing.');if(v.expiration_date<now().slice(0,10))throw fail(400,'Expiration date must not be in the past.');const id=randomUUID();const image={Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'}[v.crop_category];await db.run('INSERT INTO listings (id,farmer_id,title,crop_category,available_volume,sale_unit,price,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,v.farmer_id,v.title,v.crop_category,v.available_volume,v.sale_unit,v.price,v.harvest_date,v.expiration_date,v.shelf_life_days,+v.preservative_used,v.description,`/images/${image}.jpg`,v.traceability,now()]);await db.run('DELETE FROM listing_drafts WHERE farmer_id=?',[v.farmer_id]);res.status(201).json({id});});
+const checkoutLimit=rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:'draft-8',legacyHeaders:false});
+const contact=z.object({contact_name:z.string().trim().min(2).max(100),contact_phone:phone,
+ contact_email:z.email().max(200)});
+app.post('/api/v1/guest-orders',checkoutLimit,async(req,res)=>{
+ const v=contact.extend({listing_id:z.string().min(1),quantity:z.number().positive().max(1e6),payment_method:z.literal('pay_on_delivery').default('pay_on_delivery'),
+  delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default('')}).strict().parse(req.body);
+ const item=await db.get("SELECT l.*,f.verification_status FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id WHERE l.id=? AND l.status='published' AND l.expiration_date>=?",[v.listing_id,now().slice(0,10)]);
+ if(!item||item.verification_status!=='Verified')throw fail(404,'Produce is unavailable.');
+ const cap=guestLimitFor(item.title);
+ if(!cap||cap.unit!==(item.sale_unit||'kg'))throw fail(409,'This produce needs an account and a bulk order request.');
+ if(v.quantity>cap.max)throw fail(409,`The household limit is ${cap.max} ${cap.unit}. Sign in to send a bulk order request.`);
+ if(v.quantity>item.available_volume)throw fail(409,'Requested quantity is unavailable.');
+ const id=randomUUID();
+ await db.transaction(async tx=>{
+  if(process.env.DATABASE_URL)for(const identity of [v.contact_phone,v.contact_email.toLowerCase()].sort())await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',['guest:'+identity]);
+  const recent=await tx.all("SELECT g.quantity,l.title FROM guest_orders g JOIN listings l ON l.id=g.listing_id WHERE g.created_at>=? AND (g.contact_phone=? OR LOWER(g.contact_email)=LOWER(?)) AND g.status!='Cancelled'",[new Date(Date.now()-86400000).toISOString(),v.contact_phone,v.contact_email]);
+  const already=recent.filter(row=>guestLimitFor(row.title)?.name===cap.name).reduce((sum,row)=>sum+Number(row.quantity),0);
+  if(already+v.quantity>cap.max)throw fail(409,`The household limit is ${cap.max} ${cap.unit} across orders in 24 hours. Sign in for a bulk request.`);
+  await tx.run('INSERT INTO guest_orders (id,listing_id,quantity,quantity_unit,payment_method,unit_price,currency,contact_name,contact_phone,contact_email,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+   [id,v.listing_id,v.quantity,cap.unit,v.payment_method,item.price,process.env.CURRENCY||'ZAR',v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,now()]);
+ });
+ res.status(201).json({id,status:'New',payment_method:v.payment_method,payment_status:'unpaid',total:v.quantity*Number(item.price),currency:process.env.CURRENCY||'ZAR',message:'Order placed. Wirefen will confirm availability and delivery. Pay on delivery.'});
+});
+app.post('/api/v1/guest-orders/basket',checkoutLimit,async(req,res)=>{
+ const v=contact.extend({items:z.array(z.object({listing_id:z.string().min(1),quantity:z.number().positive().max(1e6)}).strict()).min(1).max(25),payment_method:z.literal('pay_on_delivery').default('pay_on_delivery'),
+  delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default('')}).strict().parse(req.body);
+ if(new Set(v.items.map(item=>item.listing_id)).size!==v.items.length)throw fail(400,'Combine duplicate listings in your basket.');
+ const ids=[];
+ await db.transaction(async tx=>{
+  const checked=[];
+  for(const item of v.items){
+   const row=await tx.get("SELECT l.*,f.verification_status FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id WHERE l.id=? AND l.status='published' AND l.expiration_date>=?"+(process.env.DATABASE_URL?' FOR UPDATE OF l':''),[item.listing_id,now().slice(0,10)]);
+   if(!row||row.verification_status!=='Verified')throw fail(404,'Produce is unavailable.');
+   const cap=guestLimitFor(row.title);
+   if(!cap||cap.unit!==(row.sale_unit||'kg'))throw fail(409,`${row.title} needs a bulk order request.`);
+   if(item.quantity>row.available_volume)throw fail(409,`${row.title} is unavailable in the requested quantity.`);
+   checked.push({...item,title:row.title,cap,price:Number(row.price)});
+  }
+  if(process.env.DATABASE_URL)for(const identity of [v.contact_phone,v.contact_email.toLowerCase()].sort())await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',['guest:'+identity]);
+  const recent=await tx.all("SELECT g.quantity,l.title FROM guest_orders g JOIN listings l ON l.id=g.listing_id WHERE g.created_at>=? AND (g.contact_phone=? OR LOWER(g.contact_email)=LOWER(?)) AND g.status!='Cancelled'",[new Date(Date.now()-86400000).toISOString(),v.contact_phone,v.contact_email]);
+  const totals=new Map();
+  for(const row of recent){const cap=guestLimitFor(row.title);if(cap)totals.set(cap.name,(totals.get(cap.name)||0)+Number(row.quantity));}
+  for(const item of checked){const next=(totals.get(item.cap.name)||0)+item.quantity;if(next>item.cap.max)throw fail(409,`${item.cap.name} has a household limit of ${item.cap.max} ${item.cap.unit} across orders in 24 hours. Sign in for a bulk request.`);totals.set(item.cap.name,next);}
+  for(const item of checked){const id=randomUUID();ids.push(id);await tx.run('INSERT INTO guest_orders (id,listing_id,quantity,quantity_unit,payment_method,unit_price,currency,contact_name,contact_phone,contact_email,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,item.listing_id,item.quantity,item.cap.unit,v.payment_method,item.price,process.env.CURRENCY||'ZAR',v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,now()]);}
+ });
+ res.status(201).json({ids,status:'New',payment_method:v.payment_method,payment_status:'unpaid',message:'Order placed. Wirefen will confirm availability and delivery. Pay on delivery.'});
+});
+app.post('/api/v1/bulk-orders',permit('Buyer'),async(req,res)=>{
+ const v=contact.extend({frequency:z.enum(['one_time','recurring']),produce_type:z.string().trim().min(2).max(100),
+  target_quantity:z.number().positive().max(1e9),quantity_unit:z.enum(['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes']),
+  delivery_dates:z.string().trim().min(3).max(200),target_price:z.number().positive().max(1e12),notes:z.string().trim().max(2000).default('')}).strict().parse(req.body);
+ const id=randomUUID();await db.run('INSERT INTO bulk_order_requests (id,buyer_id,frequency,produce_type,target_quantity,quantity_unit,delivery_dates,target_price,contact_name,contact_phone,contact_email,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+  [id,req.user.id,v.frequency,v.produce_type,v.target_quantity,v.quantity_unit,v.delivery_dates,v.target_price,v.contact_name,v.contact_phone,v.contact_email,v.notes,now()]);
+ res.status(201).json({id,status:'New'});
+});
+app.get('/api/v1/bulk-orders',permit('Buyer','Admin'),async(req,res)=>res.json(await db.all('SELECT * FROM bulk_order_requests'+(req.user.role==='Buyer'?' WHERE buyer_id=?':'')+' ORDER BY created_at DESC',req.user.role==='Buyer'?[req.user.id]:[])));
+app.patch('/api/v1/bulk-orders/:id',permit('Buyer','Admin'),async(req,res)=>{
+ const {status}=z.object({status:z.enum(['New','In review','Contacted','Closed','Cancelled'])}).strict().parse(req.body);
+ const row=await db.get('SELECT buyer_id,status FROM bulk_order_requests WHERE id=?',[req.params.id]);
+ if(!row)throw fail(404,'Bulk request not found.');
+ if(req.user.role==='Buyer'&&(row.buyer_id!==req.user.id||status!=='Cancelled'))throw fail(403,'You may only cancel your own request.');
+ if(row.status==='Cancelled'&&status!=='Cancelled')throw fail(409,'A cancelled request cannot be reopened.');
+ await db.run('UPDATE bulk_order_requests SET status=? WHERE id=?',[status,req.params.id]);res.json({id:req.params.id,status});
+});
+app.get('/api/v1/admin/guest-orders',permit('Admin'),async(req,res)=>res.json(await db.all('SELECT g.*,l.title FROM guest_orders g JOIN listings l ON l.id=g.listing_id ORDER BY g.created_at DESC')));
+app.patch('/api/v1/admin/guest-orders/:id',permit('Admin'),async(req,res)=>{
+ const {status}=z.object({status:z.enum(['New','In review','Confirmed','Cancelled'])}).strict().parse(req.body);
+ await db.transaction(async tx=>{
+  const order=await tx.get('SELECT * FROM guest_orders WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[req.params.id]);
+  if(!order)throw fail(404,'Guest order not found.');
+  if(order.status==='Cancelled'&&status!=='Cancelled')throw fail(409,'A cancelled order cannot be reopened.');
+  if(order.status==='Confirmed'&&!['Confirmed','Cancelled'].includes(status))throw fail(409,'A confirmed order can only be cancelled.');
+  if(status==='Cancelled'&&order.payment_status==='paid')throw fail(409,'A paid order needs a refund workflow before cancellation.');
+  if(status==='Confirmed'&&order.status!=='Confirmed'){
+   const update=await tx.run('UPDATE listings SET available_volume=available_volume-? WHERE id=? AND available_volume>=?',[order.quantity,order.listing_id,order.quantity]);
+   if(!(update.rowCount??update.changes))throw fail(409,'There is not enough stock to confirm this order.');
+  }
+  if(status==='Cancelled'&&order.status==='Confirmed')await tx.run('UPDATE listings SET available_volume=available_volume+? WHERE id=?',[order.quantity,order.listing_id]);
+  await tx.run('UPDATE guest_orders SET status=? WHERE id=?',[status,req.params.id]);
+ });
+ res.json({id:req.params.id,status});
+});
+app.post('/api/v1/admin/guest-orders/:id/collect-payment',permit('Admin'),async(req,res)=>{
+ const order=await db.get('SELECT status,payment_method,payment_status FROM guest_orders WHERE id=?',[req.params.id]);
+ if(!order)throw fail(404,'Guest order not found.');
+ if(order.status!=='Confirmed'||order.payment_method!=='pay_on_delivery')throw fail(409,'Confirm the pay-on-delivery order before recording payment.');
+ if(order.payment_status==='paid')throw fail(409,'Payment has already been recorded.');
+ const paid_at=now();
+ const result=await db.run("UPDATE guest_orders SET payment_status='paid',paid_at=? WHERE id=? AND status='Confirmed' AND payment_status='unpaid'",[paid_at,req.params.id]);
+ if(!(result.rowCount??result.changes))throw fail(409,'The order changed before payment could be recorded.');
+ res.json({id:req.params.id,payment_status:'paid',paid_at});
 });
 app.post('/api/v1/orders',permit('Buyer'),async(req,res)=>{const v=z.object({listing_id:z.string(),volume:z.number().positive(),delivery_location:z.string().trim().min(3).max(200),notes:z.string().max(1000).default('')}).parse(req.body);const l=await db.get("SELECT * FROM listings WHERE id=? AND status='published' AND expiration_date>=?",[v.listing_id,now().slice(0,10)]);if(!l)throw fail(404,'This listing is no longer available.');if(v.volume>l.available_volume)throw fail(400,'Requested volume exceeds available supply.');const id=randomUUID();await db.run('INSERT INTO order_requests (id,listing_id,buyer_id,volume,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?)',[id,v.listing_id,req.user.id,v.volume,v.delivery_location,v.notes,now()]);res.status(201).json({id,status:'New'});});
 app.get('/api/v1/orders',permit('Buyer','Admin'),async(req,res)=>res.json(await db.all('SELECT o.*,l.title,u.name AS buyer_name,u.phone FROM order_requests o JOIN listings l ON l.id=o.listing_id JOIN users u ON u.id=o.buyer_id'+(req.user.role==='Buyer'?' WHERE o.buyer_id=?':'')+' ORDER BY o.created_at DESC',req.user.role==='Buyer'?[req.user.id]:[])));
 app.patch('/api/v1/orders/:id',permit('Admin'),async(req,res)=>{const {status}=z.object({status:z.enum(['New','In review','Contacted','Closed'])}).parse(req.body);if(!await db.get('SELECT id FROM order_requests WHERE id=?',[req.params.id]))throw fail(404,'Request not found.');await db.run('UPDATE order_requests SET status=? WHERE id=?',[status,req.params.id]);res.json({ok:true});});
 app.post('/api/v1/payments',permit('Buyer','Admin'),async(req,res)=>{
+ if(!demo)throw fail(501,'Online payment is unavailable until a payment provider is connected.');
  const v=z.object({order_id:z.string(),amount:z.number().positive().max(1e12),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR']),method:z.enum(['malawian_bank','airtel_money_mw','tnm_mpamba','zambian_momo','card']),provider:z.string().trim().max(100),bank_name:z.string().trim().max(100).optional(),account_or_phone:z.string().trim().min(3).max(50),notes:z.string().trim().max(500).optional()}).parse(req.body);
  const order=await db.get('SELECT * FROM order_requests WHERE id=?',[v.order_id]);
  if(!order)throw fail(404,'Order request not found.');
@@ -147,8 +269,9 @@ export async function processUssdSession({sessionId,phoneNumber,text='',serviceC
    if(parts.length===4)return 'CON Enter your Ward or Locality (e.g. Mitundu, Chulu):';
    if(parts.length>=5){
     const name=parts[1],district=parts[3],locality=parts[4],id=randomUUID(),stamp=now();
+    const g=normalizeGeography({country,region:district,locality});
     await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,name,phoneNumber,hashPassword(randomUUID()),'Farmer',1,stamp,stamp]);
-    await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location) VALUES (?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,country,district,district,locality,locality,`${locality}, ${district}, ${country}`]);
+    await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,country_code,region,district,locality,ward,region_key,location_key,location) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location]);
     await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,1,stamp,'ussd']);
     return `END Welcome to Wirefen, ${name}!\nYour Farmer profile is active in ${district}, ${country}. Dial *211# anytime to check prices or record farm costs.`;
    }
@@ -185,11 +308,12 @@ export async function processUssdSession({sessionId,phoneNumber,text='',serviceC
   if(parts.length===3)return 'CON Step 3/4: Expected spend for Processing (post-harvest prep)? (Reply 0 to skip):';
   if(parts.length===4)return 'CON Step 4/4: Expected spend for Transportation? (Reply 0 to skip):';
   if(parts.length>=5){
-   const c1=Number(parts[1])||0,c2=Number(parts[2])||0,c3=Number(parts[3])||0,c4=Number(parts[4])||0;
-   const total=c1+c2+c3+c4;
-   if(farm){
-    await db.run("INSERT INTO historical_baselines (farmer_id,cost_fertilizer_seeds,cost_labor,cost_processing,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(farmer_id) DO UPDATE SET cost_fertilizer_seeds=excluded.cost_fertilizer_seeds,cost_labor=excluded.cost_labor,cost_processing=excluded.cost_processing,cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status='draft',updated_at=excluded.updated_at",[farm.id,c1,c2,c3,c4,total,'draft',now()]);
-   }
+   const costs=parts.slice(1,5).map(parseCost);
+   if(costs.some(value=>value===null))return 'END Invalid cost. Nothing was saved. Enter non-negative amounts with at most two decimal places.';
+   if(!farm||!hasGeography(farm))return 'END Complete your farm location in Settings before recording costs.';
+   const [c1,c2,c3,c4]=costs;
+   const saved=await saveBaseline(db,farm.id,Object.fromEntries(costFields.map((field,i)=>[field,costs[i]])));
+   const total=saved.avg_production_cost;
    return `END Costs saved!\nFertilizer: ${c1}\nLabor: ${c2}\nProcessing: ${c3}\nTransport: ${c4}\nTotal Estimated Cost: ${currency} ${total}.\nThank you!`;
   }
  }
@@ -208,6 +332,9 @@ export async function processUssdSession({sessionId,phoneNumber,text='',serviceC
 
 app.post('/api/v1/webhooks/ussd',async(req,res)=>{
  try{
+  const secret=process.env.USSD_WEBHOOK_SECRET;
+  const supplied=req.get('X-Wirefen-USSD-Secret')||'';
+  if(!secret||supplied.length!==secret.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(secret)))return res.status(403).type('text/plain').send('END Unauthorized.');
   const sessionId=req.body.sessionId||randomUUID(),serviceCode=req.body.serviceCode||'*211#';
   const phoneNumber=req.body.phoneNumber||req.body.phone||'';
   const text=req.body.text??'';
@@ -221,7 +348,10 @@ app.post('/api/v1/webhooks/ussd',async(req,res)=>{
 });
 
 app.post('/api/v1/ussd/simulate',async(req,res)=>{
+ if(!demo)throw fail(404,'Not found.');
+ if(!req.user)throw fail(401,'Sign in to use the simulator.');
  const v=z.object({phoneNumber:phone,text:z.string().max(200).default(''),serviceCode:z.string().max(20).default('*211#'),sessionId:z.string().max(100).optional()}).parse(req.body);
+ if(req.user.role!=='Admin'&&req.user.phone!==v.phoneNumber)throw fail(403,'Use your own phone number.');
  const sessionId=v.sessionId||randomUUID();
  const response=await processUssdSession({sessionId,phoneNumber:v.phoneNumber,text:v.text,serviceCode:v.serviceCode});
  res.json({sessionId,phoneNumber:v.phoneNumber,response,isEnd:response.startsWith('END'),menuText:response.replace(/^(CON|END)\s+/,'')});
@@ -243,11 +373,13 @@ app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
    if(match){
     const role=match[1].charAt(0).toUpperCase()+match[1].slice(1).toLowerCase();
     const rest=match[2].split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
-    const name=rest[0]||'Wirefen User',country=rest[1]||'Malawi',district=rest[2]||'Lilongwe',locality=rest[3]||'Mitundu';
+    const name=rest[0]||'',country=rest[1],district=rest[2],locality=rest[3];
+    if(name.length<2||role==='Farmer'&&(!country||!district||!locality))return xml('Enter: JOIN FARMER <Name>, <Country>, <District>, <Locality>. All location fields are required.');
+    let g;try{g=role==='Farmer'?normalizeGeography({country,region:district,locality}):null;}catch{return xml('Choose a valid country, district and locality. Nothing was saved.');}
     const id=randomUUID(),stamp=now();
     await db.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,name,From,hashPassword(randomUUID()),role,1,stamp,stamp]);
     if(role==='Farmer'){
-     await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,region,district,locality,ward,location) VALUES (?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,country,district,district,locality,locality,`${locality}, ${district}, ${country}`]);
+     await db.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,country_code,region,district,locality,ward,region_key,location_key,location) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[randomUUID(),id,`${name}'s Farm`,g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location]);
     }
     await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,1,stamp,'sms']);
     await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);
@@ -261,17 +393,25 @@ app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
  if(['STOP','START'].includes(command)){const opt=+(command==='START');await db.run('UPDATE users SET sms_opt_in=?,sms_opt_in_at=? WHERE id=?',[opt,opt?now():null,u.id]);await db.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),u.id,opt,now(),'sms']);await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);return xml(opt?'SMS updates enabled. Reply BASELINE to record yield.':'SMS updates stopped. Reply START to opt in again.');}
  if(!u.sms_opt_in)return xml('Reply START to opt in to Wirefen SMS.');
  if(u.role!=='Farmer')return xml('Farmer baseline entry is available to farmer accounts.');
- const farm=await db.get('SELECT id FROM farmer_profiles WHERE user_id=?',[u.id]);
+ const farm=await db.get('SELECT * FROM farmer_profiles WHERE user_id=?',[u.id]);
+ if(!hasGeography(farm))return xml('Complete Country, District / Region and Locality / Ward in Wirefen Settings before using SMS forms.');
  const state=await db.get('SELECT * FROM conversational_state WHERE user_phone=?',[From]);
  let message;
- const parseCost=txt=>{const s=txt.trim().toLowerCase();if(s==='skip')return 0;const n=Number(s.replace(/[^0-9.]/g,''));return Number.isFinite(n)&&n>=0&&n<=1e12?n:null;};
- if(command==='BASELINE'){await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','avg_yield_per_acre',now()]);message='What is your average yield in kilograms per acre? Reply with a positive number.';}
- else if(['COST','EXPENSE','EXPENSES'].includes(command)){await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_fertilizer_seeds',now()]);message='Form 1 Financial Breakdown (1/4): Expected spend for Fertilizer and Seeds? Reply with an amount, or 0.';}
- else if(state?.last_question_asked==='avg_yield_per_acre'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=Number(Body.trim());if(!Number.isFinite(value)||value<=0||value>1e9)message='Enter a positive yield in kilograms per acre, such as 500.';else{await db.run("INSERT INTO historical_baselines (farmer_id,avg_yield_per_acre,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET avg_yield_per_acre=excluded.avg_yield_per_acre,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_fertilizer_seeds',now()]);message='Yield saved to your draft. Form 1 Financial Breakdown (1/4): Expected spend for Fertilizer and Seeds? Reply with an amount, or 0.';}}
- else if(state?.last_question_asked==='cost_fertilizer_seeds'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Fertilizer and Seeds, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_fertilizer_seeds,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_fertilizer_seeds=excluded.cost_fertilizer_seeds,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_labor',now()]);message='Fertilizer & seeds spend saved. Step 2/4: Expected spend for Labor (planting and maintenance)? Reply with an amount, or 0.';}}
- else if(state?.last_question_asked==='cost_labor'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Labor, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_labor,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_labor=excluded.cost_labor,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_processing',now()]);message='Labor spend saved. Step 3/4: Expected spend for Processing (harvest prep for storage)? Reply with an amount, or 0.';}}
- else if(state?.last_question_asked==='cost_processing'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Processing, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_processing,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_processing=excluded.cost_processing,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_transportation',now()]);message='Processing spend saved. Step 4/4: Expected spend for Transportation (moving produce from farm)? Reply with an amount, or 0.';}}
- else if(state?.last_question_asked==='cost_transportation'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Transportation, or reply 0 to skip.';else{const row=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[farm.id])||{};const total=(Number(row.cost_fertilizer_seeds)||0)+(Number(row.cost_labor)||0)+(Number(row.cost_processing)||0)+value;await db.run("INSERT INTO historical_baselines (farmer_id,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status='draft',updated_at=excluded.updated_at",[farm.id,value,total,now()]);await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);message=`Transportation spend saved. Financial estimation complete! Total Estimated Cost: ${process.env.CURRENCY||'ZAR'} ${total}. Complete the remaining baseline fields on Wirefen.`;}}
+ if(command==='BASELINE'||['COST','EXPENSE','EXPENSES'].includes(command)){
+  const field=command==='BASELINE'?'avg_yield_per_acre':costFields[0];
+  await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline',field,now()]);
+  message=field==='avg_yield_per_acre'?'What is your average yield in kilograms per acre? Reply with a positive number.':'Form 1 Financial Breakdown (1/4): Expected spend for Fertilizer and Seeds? Reply with an amount, or 0.';
+ }else if(state&&Date.now()-Date.parse(state.timestamp)<86400000){
+  const field=state.last_question_asked,index=costFields.indexOf(field),value=field==='avg_yield_per_acre'?Number(Body.trim()):parseCost(Body);
+  if(field==='avg_yield_per_acre'&&(!Number.isFinite(value)||value<=0||value>1e9))message='Enter a positive yield in kilograms per acre, such as 500.';
+  else if(index>=0&&value===null)message='Enter a nonnegative amount with up to two decimal places, or 0. Your answer was not saved.';
+  else if(field==='avg_yield_per_acre'||index>=0){
+   const saved=await saveBaseline(db,farm.id,{[field]:value,status:'draft'});
+   const next=field==='avg_yield_per_acre'?0:index+1;
+   if(next<4){await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline',costFields[next],now()]);message=`Answer saved. Step ${next+1}/4: Expected spend for ${['Fertilizer and Seeds','Labor (planting and maintenance)','Processing (harvest preparation for storage)','Transportation (moving produce from farm)'][next]}? Reply with an amount, or 0.`;}
+   else{await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);message=`Financial breakdown saved. Total Estimated Cost: ${saved.currency} ${saved.avg_production_cost}. Complete the remaining growing history fields and submit on Wirefen.`;}
+  }else message='Reply COST to start your financial breakdown.';
+ }
  else message='Reply BASELINE to record average yield, COST for financial breakdown, or STOP to opt out.';
  await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);xml(message);
 });

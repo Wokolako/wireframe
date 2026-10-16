@@ -20,6 +20,9 @@ model User {
   pwa_account         PwaAccount?
   farmer_profile      FarmerProfile?
   order_requests      OrderRequest[]
+  bulk_order_requests BulkOrderRequest[]
+  permissions         UserPermission[]
+  verifications       ListingVerification[]
   sessions            Session[]
   sms_consents        SmsConsent[]
   conversational_state ConversationalState?
@@ -61,6 +64,9 @@ model FarmerProfile {
   user_id             String              @unique
   farm_name           String
   country             String              @default("")
+  country_code        String              @default("")
+  region_key          String              @default("")
+  location_key        String              @default("")
   region              String              @default("")
   district            String?
   locality            String              @default("")
@@ -69,6 +75,7 @@ model FarmerProfile {
   farm_size           Float               @default(0)
   verification_status String              @default("Unverified")
   user                User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  financial_estimate  FinancialEstimate?
   historical_baseline HistoricalBaseline?
   listings            Listing[]
   listing_draft       ListingDraft?
@@ -82,11 +89,6 @@ model HistoricalBaseline {
   avg_land_size         Float?
   avg_yield_per_acre    Float?
   avg_duration_days     Int?
-  cost_fertilizer_seeds Float?
-  cost_labor            Float?
-  cost_processing       Float?
-  cost_transportation   Float?
-  avg_production_cost   Float?
   status                String        @default("draft")
   updated_at            String
   farmer                FarmerProfile @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
@@ -100,6 +102,7 @@ model Listing {
   title             String
   crop_category     String
   available_volume  Float
+  sale_unit         String         @default("kg")
   price             Float
   harvest_date      String
   expiration_date   String
@@ -112,7 +115,9 @@ model Listing {
   status            String         @default("published")
   created_at        String
   farmer            FarmerProfile  @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
+  verification      ListingVerification?
   order_requests    OrderRequest[]
+  guest_orders       GuestOrder[]
 
   @@index([crop_category, harvest_date], map: "listings_category_idx")
   @@map("listings")
@@ -178,4 +183,86 @@ model ListingDraft {
   farmer     FarmerProfile @relation(fields: [farmer_id], references: [id], onDelete: Cascade)
 
   @@map("listing_drafts")
+}
+
+model FinancialEstimate {
+  farmer_id String @id
+  cost_fertilizer_seeds Decimal?
+  cost_labor Decimal?
+  cost_processing Decimal?
+  cost_transportation Decimal?
+  avg_production_cost Decimal @default(0)
+  legacy_total Decimal?
+  country_code String
+  region String
+  locality String
+  region_key String
+  location_key String
+  currency String
+  status String @default("draft")
+  updated_at String
+  farmer FarmerProfile @relation(fields: [farmer_id], references: [id])
+  @@map("financial_estimates")
+}
+model UserPermission {
+  user_id String
+  permission String
+  user User @relation(fields: [user_id], references: [id])
+  @@id([user_id, permission])
+  @@map("user_permissions")
+}
+model ListingVerification {
+  listing_id String @id
+  agent_id String
+  crop_confirmed Int @default(0)
+  volume_confirmed Int @default(0)
+  location_confirmed Int @default(0)
+  harvest_confirmed Int @default(0)
+  notes String @default("")
+  score Int?
+  status String @default("pending")
+  updated_at String
+  listing Listing @relation(fields: [listing_id], references: [id])
+  agent User @relation(fields: [agent_id], references: [id])
+  @@map("listing_verifications")
+}
+
+model GuestOrder {
+  id String @id
+  listing_id String
+  quantity Float
+  quantity_unit String @default("kg")
+  payment_method String @default("pay_on_delivery")
+  payment_status String @default("unpaid")
+  unit_price Float?
+  currency String?
+  paid_at String?
+  contact_name String
+  contact_phone String
+  contact_email String
+  delivery_location String
+  notes String @default("")
+  status String @default("New")
+  created_at String
+  listing Listing @relation(fields: [listing_id], references: [id])
+  @@map("guest_orders")
+}
+
+model BulkOrderRequest {
+  id String @id
+  buyer_id String
+  frequency String
+  produce_type String
+  target_quantity Float
+  quantity_unit String
+  delivery_dates String
+  target_price Float
+  contact_name String
+  contact_phone String
+  contact_email String
+  notes String @default("")
+  status String @default("New")
+  created_at String
+  buyer User @relation(fields: [buyer_id], references: [id])
+  @@map("bulk_order_requests")
 }

@@ -2,9 +2,26 @@
 
 Wirefen agricultural marketplace and lifecycle platform.
 
-Phase 1 agricultural marketplace: React/TypeScript client, independently served Express REST API, PostgreSQL support, and a zero-configuration SQLite development database.
+Phase 1 agricultural marketplace: React/TypeScript client, Express REST API, and Neon PostgreSQL in live mode. SQLite remains available for isolated tests and presentation development.
 
-## Presentation version (current default)
+## Live backend with Neon
+
+The local `.env` enables `VITE_USE_BACKEND=true` and `SEED_DEMO=false`. Set a Neon pooled `DATABASE_URL` and matching Clerk keys, then run:
+
+```powershell
+npm.cmd install
+npm.cmd run dev:full
+```
+
+For a built app served by Express, use `npm.cmd run build` followed by `npm.cmd run start:api`. Live mode refuses to start without `DATABASE_URL`; it does not silently use SQLite. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the API to refresh its in-memory limit lookup.
+
+Guest household checkout places an order without an account using pay on delivery. Staff confirm stock and delivery, then record collected payment in the admin queue. No external payment provider is required for this method.
+
+Available stock and supplier locations are restricted to admin reports. The original specification's public `min_volume` and `max_volume` filters are intentionally unavailable to buyers because repeated filter queries would reveal hidden inventory.
+
+## Optional presentation mode
+
+Set `VITE_USE_BACKEND=false` before starting or building the frontend. This mode is a separate local demonstration and does not use Neon.
 
 Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and EUR/USD example rates remain browser-local dummy data. The frontend does not call the Wirefen Node API, SMS gateway or currency provider. The Node backend remains in `server/` for later activation.
 
@@ -22,9 +39,9 @@ npm.cmd start
 
 Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
 
-## Connect the existing backend later
+## Backend configuration
 
-Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. The admin designation currently controls the dummy-data workspace only. When enabling the Node API, provision/link the admin with the documented server-side admin scripts; the API continues to enforce its database roles.
+Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. Admin access requires a server-side role or permission; the presentation-mode email shortcut does not grant live API access.
 
 The launch market is still a configurable sample (South Africa/ZAR). Do not treat presentation exchange rates or records as live data.
 

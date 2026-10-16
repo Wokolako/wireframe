@@ -9,17 +9,17 @@ test('real identity is required and old sample role bypasses are rejected',async
  setDemoIdentity(null);assert.equal(await demoApi('/auth/me'),null);
  await assert.rejects(post('/auth/demo',{role:'Admin'}));
  await assert.rejects(post('/auth/onboard',{role:'Buyer'}));
- assert.equal((await demoApi('/listings')).length,6);
+ assert.equal((await demoApi('/listings')).length,0);
 });
 test('only the verified designated email receives the dummy admin workspace',async()=>{
  setDemoIdentity({id:'user_admin',name:'George',email:'georgechivalo01@gmail.com',verifiedEmails:[]});assert.equal(await demoApi('/auth/me'),null);
  await assert.rejects(post('/auth/onboard',{name:'George',phone:'+27824440000',role:'Admin'}));
- setDemoIdentity({id:'user_admin',name:'George',email:'georgechivalo01@gmail.com',verifiedEmails:['georgechivalo01@gmail.com']});assert.equal((await demoApi('/auth/me')).role,'Admin');assert.equal((await demoApi('/farmers')).length,3);
+ setDemoIdentity({id:'user_admin',name:'George',email:'georgechivalo01@gmail.com',verifiedEmails:['georgechivalo01@gmail.com']});assert.equal((await demoApi('/auth/me')).role,'Admin');assert.equal((await demoApi('/farmers')).length,0);
  setDemoIdentity({id:'user_other',name:'Other',email:'other@example.com',verifiedEmails:['other@example.com']});assert.equal(await demoApi('/auth/me'),null);await assert.rejects(demoApi('/farmers'));
 });
 test('real users can create local buyer/farmer profiles without public admin registration',async()=>{
+ setDemoIdentity({id:'user_other',name:'Other',email:'other@example.com',verifiedEmails:['other@example.com']});
  const buyer=await post('/auth/onboard',{name:'Test Buyer',phone:'+27824440001',role:'Buyer',sms_opt_in:false});assert.equal(buyer.id,'user_other');assert.equal(buyer.role,'Buyer');
- await post('/orders',{listing_id:'produce-1',volume:100,delivery_location:'Sample collection'});assert.equal((await demoApi('/orders')).length,1);
- setDemoIdentity({id:'user_grower',name:'Grower',email:'grower@example.com',verifiedEmails:['grower@example.com']});const farmer=await post('/auth/onboard',{name:'Test Grower',phone:'+27824440002',role:'Farmer',farm_name:'Demo farm',location:'Sample region',sms_opt_in:false});assert.equal(farmer.role,'Farmer');assert.ok(farmer.farmer.id);
+ setDemoIdentity({id:'user_grower',name:'Grower',email:'grower@example.com',verifiedEmails:['grower@example.com']});const farmer=await post('/auth/onboard',{name:'Test Grower',phone:'+27824440002',role:'Farmer',country:'ZA',region:'Test Region',locality:'Ward 12',farm_name:'Demo farm',location:'Sample region',sms_opt_in:false});assert.equal(farmer.role,'Farmer');assert.ok(farmer.farmer.id);
  setDemoIdentity(null);assert.equal(await demoApi('/auth/me'),null);await assert.rejects(demoApi('/orders'));
 });

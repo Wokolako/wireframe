@@ -16,14 +16,19 @@
     "preview": "vite preview --host 127.0.0.1",
     "start:api": "node --env-file-if-exists=.env server/index.mjs",
     "test:presentation": "node tests/presentation-ui.mjs",
+    "test:live-storefront": "node tests/live-storefront-ui.mjs",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "seed:limits": "node --env-file=.env server/seed-excel-limits.mjs",
+    "db:check": "node --env-file=.env server/check-neon.mjs",
+    "test:neon": "node --env-file=.env tests/live-neon-readonly.mjs"
   },
   "dependencies": {
     "@clerk/express": "^2.1.78",
     "@clerk/react": "^6.17.8",
     "@fontsource/dm-sans": "^5.2.6",
+    "@neondatabase/serverless": "^1.2.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "cookie-parser": "^1.4.7",
