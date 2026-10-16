@@ -1,4 +1,5 @@
 node_modules/
+.next/
 dist/
 .env
 data/
@@ -6,4 +7,3 @@ test-results/
 *.tsbuildinfo
 
 .env.*
-!.env.example

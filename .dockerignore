@@ -5,5 +5,4 @@ test-results
 .git
 .env
 .env.*
-!.env.example
 *.tsbuildinfo

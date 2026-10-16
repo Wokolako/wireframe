@@ -10,7 +10,7 @@ const browser=await chromium.launch({channel:'chrome',headless:true});let page;
 try{
  const context=await browser.newContext({viewport:{width:1440,height:1000}});await setupClerkTestingToken({context});await context.addInitScript(()=>localStorage.setItem('wirefen-install-v1',JSON.stringify({promptedAt:new Date().toISOString()})));
  page=await context.newPage();const requests=[];page.on('request',r=>{if(new URL(r.url()).pathname.startsWith('/api/v1'))requests.push(r.url());});await page.route('**/api/v1/**',r=>r.abort());
- await page.goto(process.env.TEST_URL||'http://127.0.0.1:3001');await page.waitForFunction(()=>window.Clerk?.loaded);
+ await page.goto(process.env.TEST_URL||'http://127.0.0.1:3000');await page.waitForFunction(()=>window.Clerk?.loaded);
  await page.getByRole('button',{name:'Create account',exact:true}).click();await page.locator('.cl-signUp-root').waitFor();await page.locator('input[name=emailAddress]').fill(email);await page.locator('input[name=password]').fill(password);
  for(const [name,value] of [['firstName','Wirefen'],['lastName','Test']])if(await page.locator(`input[name=${name}]`).isVisible())await page.locator(`input[name=${name}]`).fill(value);
  await page.locator('.cl-signUp-root').getByRole('button',{name:'Continue',exact:true}).click();

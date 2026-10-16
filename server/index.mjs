@@ -6,9 +6,7 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
-import { randomUUID, randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
-import { resolve } from 'node:path';
-import { existsSync } from 'node:fs';
+import { randomUUID, randomBytes, createHash, createHmac, scryptSync, timingSafeEqual } from 'node:crypto';
 import twilio from 'twilio';
 import { db, initDb } from './db.mjs';
 import { seed, hashPassword } from './seed.mjs';
@@ -16,12 +14,12 @@ import { getExchangeRates } from './exchange.mjs';
 
 await initDb();
 const production = process.env.NODE_ENV === 'production';
-const clerkKey=process.env.CLERK_PUBLISHABLE_KEY||process.env.VITE_CLERK_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkKey=process.env.CLERK_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const clerkEnabled=!!(clerkKey&&process.env.CLERK_SECRET_KEY);
 if(!!clerkKey!==!!process.env.CLERK_SECRET_KEY)throw new Error('Configure both Clerk publishable and secret keys.');
 const clerkHost=clerkEnabled?'https://'+Buffer.from(clerkKey.split('_').slice(2).join('_'),'base64').toString().replace(/\$$/,''):null;
 const authorizedParties=process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filter(Boolean)||[];
-if(!production)authorizedParties.push('http://localhost:5173','http://127.0.0.1:5173','http://localhost:3001','http://127.0.0.1:3001');
+if(!production)authorizedParties.push('http://localhost:3000','http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001');
 if(clerkEnabled&&production&&!authorizedParties.length)throw new Error('APP_ORIGIN is required with Clerk in production.');
 const demo = !production && process.env.SEED_DEMO !== 'false';
 if(demo) await seed(db);
@@ -29,7 +27,7 @@ export const app = express();
 app.disable('x-powered-by');
 if(process.env.TRUST_PROXY_HOPS){const hops=Number(process.env.TRUST_PROXY_HOPS);if(!Number.isInteger(hops)||hops<1||hops>5)throw new Error('TRUST_PROXY_HOPS must be an integer from 1 to 5.');app.set('trust proxy',hops);}
 app.use(helmet({ contentSecurityPolicy: { directives: { ...(clerkEnabled?{'script-src':["'self'",clerkHost,'https://challenges.cloudflare.com','https://*.protect.clerk.com'],'connect-src':["'self'",clerkHost,'https://*.protect.clerk.com:*','https://clerk-telemetry.com','https://*.clerk-telemetry.com'],'frame-src':["'self'",'https://challenges.cloudflare.com','https://*.protect.clerk.com'],'worker-src':["'self'",'blob:']}:{}), 'img-src': ["'self'",'data:','https://img.clerk.com'], 'upgrade-insecure-requests': production ? [] : null } }, crossOriginEmbedderPolicy:false }));
-app.use(express.json({limit:'32kb'}), express.urlencoded({extended:false,limit:'16kb'}),cookieParser());
+app.use(express.json({limit:'32kb',verify:(req,res,buffer)=>{req.rawBody=Buffer.from(buffer);}}), express.urlencoded({extended:false,limit:'16kb'}),cookieParser());
 if(clerkEnabled)app.use('/api',clerkMiddleware({publishableKey:clerkKey,secretKey:process.env.CLERK_SECRET_KEY,authorizedParties}));
 const fail = (status,message) => Object.assign(new Error(message),{status});
 const hash = v => createHash('sha256').update(v).digest('hex');
@@ -39,21 +37,180 @@ app.use('/api',async(req,res,next)=>{
  res.set('Cache-Control','no-store');
  if(!['GET','HEAD','OPTIONS'].includes(req.method) && !req.path.startsWith('/v1/webhooks/')){
    const origin=req.get('origin');
-   if(origin && !authorizedParties.includes(origin) && new URL(origin).host!==req.get('host')) return next(fail(403,'Request origin is not allowed.'));
+   if(origin && !req.path.startsWith('/v1/paychangu/webhook') && !authorizedParties.includes(origin) && new URL(origin).host!==req.get('host')) return next(fail(403,'Request origin is not allowed.'));
  }
  try {if(clerkEnabled){const identity=getAuth(req);req.clerkUserId=identity.isAuthenticated?identity.userId:null;if(req.clerkUserId)req.user=await db.get('SELECT u.* FROM users u JOIN clerk_identities c ON c.user_id=u.id WHERE c.clerk_user_id=?',[req.clerkUserId]);return next();}const s=req.cookies.wirefen_session && await db.get('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?',[hash(req.cookies.wirefen_session),now()]); if(s) req.user=await db.get('SELECT * FROM users WHERE id=?',[s.user_id]); next();} catch(e){next(e);}
 });
 app.use('/api/v1/pwa',pwaRouter(db,{production}));
 app.get('/api/v1/health',async(req,res)=>{await db.get('SELECT 1 AS ok');res.json({status:'ok',service:'wirefen-api',version:'1.0.0'});});
 const permit = (...roles)=>(req,res,next)=>!req.user?next(fail(401,'Sign in to continue.')):!roles.includes(req.user.role)?next(fail(403,'Your account cannot perform this action.')):next();
+const paymentLimit=rateLimit({windowMs:60000,limit:30,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many payment requests. Please try again shortly.'}});
+const payChanguSecret=()=>process.env.PAYCHANGU_SECRET_KEY;
+let payChanguOperatorsCache;
+function payChanguErrorMessage(payload,sensitiveValues=[]){
+ const messages=[];
+ const collect=(value,label='',depth=0,errorContext=false)=>{
+  if(depth>6||messages.length>=5)return;
+  if(typeof value==='string'){
+   const message=value.replace(/[\u0000-\u001f\u007f]+/g,' ').trim();
+   if(message&&errorContext)messages.push(label?`${label}: ${message}`:message);
+  }else if(Array.isArray(value))for(const item of value)collect(item,label,depth+1,errorContext);
+  else if(value&&typeof value==='object')for(const [key,item] of Object.entries(value)){
+   const diagnostic=['message','error','detail','errors','reason','description'].includes(key.toLowerCase());
+   if(diagnostic)collect(item,label||key,depth+1,true);
+   else if(errorContext)collect(item,key,depth+1,true);
+   else collect(item,label,depth+1,false);
+  }
+ };
+ collect(payload);
+ const secrets=[process.env.PAYCHANGU_SECRET_KEY,process.env.PAYCHANGU_WEBHOOK_SECRET,...sensitiveValues].filter(value=>typeof value==='string'&&value.length>0);
+ const escapedSecrets=secrets.map(value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+ return messages.join('; ').replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g,'[redacted email]').replace(/\+?\d[\d\s().-]{6,}\d/g,'[redacted phone]').replace(new RegExp(escapedSecrets.join('|'),'g'),'[redacted]').slice(0,240);
+}
+async function payChanguOperators(){
+ if(payChanguOperatorsCache&&Date.now()-payChanguOperatorsCache.updatedAt<300000)return payChanguOperatorsCache.items;
+ const secret=payChanguSecret();if(!secret)throw fail(503,'Mobile-money checkout is not configured.');
+ const response=await fetch('https://api.paychangu.com/mobile-money/',{headers:{Accept:'application/json',Authorization:`Bearer ${secret}`}});
+ const body=await response.json().catch(()=>null);
+ if(!response.ok||body?.status==='failed')throw fail(502,'PayChangu could not provide supported mobile-money operators.');
+ const items=Array.isArray(body?.data)?body.data.filter(operator=>typeof operator?.ref_id==='string'&&operator.ref_id&&typeof operator?.name==='string'&&operator.name&&['MK','MWK'].includes(String(operator.supported_country?.currency||'').toUpperCase())):[];
+ if(!items.length)throw fail(502,'PayChangu returned no supported mobile-money operators.');
+ payChanguOperatorsCache={updatedAt:Date.now(),items};return items;
+}
+async function verifyPayChanguCharge(chargeId){
+ const secret=payChanguSecret();if(!secret)throw fail(503,'Mobile-money checkout is not configured.');
+ const response=await fetch(`https://api.paychangu.com/mobile-money/payments/${encodeURIComponent(chargeId)}/verify`,{headers:{Accept:'application/json',Authorization:`Bearer ${secret}`}});
+ const body=await response.json().catch(()=>null);
+ if(!response.ok||!body)throw fail(502,'PayChangu could not verify this payment.');
+ return body;
+}
+const normalizedPaymentStatus=value=>String(value||'').toLowerCase()==='successful'?'success':String(value||'').toLowerCase();
+async function settlePurchase(order,verified){
+ const details=verified?.data??verified;
+ if(normalizedPaymentStatus(details?.status||verified?.status)!=='success')return 'pending';
+ const paidCurrency=String(details?.currency||'').toUpperCase();
+ const currency=paidCurrency==='MK'?'MWK':paidCurrency;
+ const paidAmount=Number(details?.amount);
+ if(String(details?.charge_id||'')!==String(order.provider_charge_id)||currency!==order.currency||!Number.isFinite(paidAmount)||paidAmount<Number(order.amount))throw fail(409,'The verified payment does not match this order.');
+ return db.transaction(async tx=>{
+  const current=await tx.get('SELECT * FROM purchase_orders WHERE id=?',[order.id]);
+  if(!current)throw fail(404,'Purchase order not found.');
+  if(current.status==='paid')return 'paid';
+  if(current.status!=='pending')return current.status;
+  const claimed=await tx.run("UPDATE purchase_orders SET status='paid',provider_reference=?,updated_at=? WHERE id=? AND status='pending'",[String(details.ref_id||details.reference||''),now(),order.id]);
+  const claimCount=typeof claimed.rowCount==='number'?claimed.rowCount:claimed.changes;
+  if(!claimCount)return (await tx.get('SELECT status FROM purchase_orders WHERE id=?',[order.id]))?.status||'failed';
+  const items=await tx.get('SELECT COUNT(*) AS count FROM purchase_order_items WHERE order_id=?',[order.id]);
+  if(!Number(items?.count))throw fail(409,'Purchase order has no items.');
+  for(const item of await tx.all('SELECT listing_id,quantity FROM purchase_order_items WHERE order_id=?',[order.id])){
+   const result=await tx.run("UPDATE listings SET available_volume=available_volume-?,status=CASE WHEN available_volume-?<=0 THEN 'sold_out' ELSE status END WHERE id=? AND available_volume>=?",[item.quantity,item.quantity,item.listing_id,item.quantity]);
+   const affected=typeof result.rowCount==='number'?result.rowCount:result.changes;
+   if(!affected)throw fail(409,'A listing no longer has enough available supply to fulfill this order.');
+  }
+  return 'paid';
+ });
+}
+app.get('/api/v1/paychangu/operators',paymentLimit,async(req,res)=>res.json({data:await payChanguOperators()}));
+app.post('/api/v1/paychangu/initialize',paymentLimit,permit('Buyer'),async(req,res)=>{
+ if(demo&&process.env.PAYCHANGU_TEST_MODE!=='true')throw fail(503,'Checkout is disabled while sample marketplace data is enabled. Configure MWK listing prices and set SEED_DEMO=false before testing payments.');
+ const secret=payChanguSecret();if(!secret)throw fail(503,'Mobile-money checkout is not configured.');
+ const currency=String(process.env.CURRENCY||'MWK').toUpperCase();
+ if(currency!=='MWK')throw fail(503,'PayChangu mobile-money checkout requires the marketplace currency to be MWK.');
+ const input=z.object({
+  items:z.array(z.object({listing_id:z.string().min(1).max(100),quantity:z.coerce.number().positive().max(1e9)})).min(1).max(30),
+  operator_ref_id:z.string().min(1).max(100),
+  mobile:z.string().trim().regex(/^\+265\d{9}$/,'Enter a Malawi mobile number with country code and 9 digits, such as +265991234567.'),
+  email:z.email().max(254),
+  expected_total:z.coerce.number().int().positive(),
+  first_name:z.string().trim().max(100).default(''),
+  last_name:z.string().trim().max(100).default('')
+ }).parse(req.body);
+ const operators=await payChanguOperators();
+ if(!operators.some(operator=>String(operator.ref_id)===input.operator_ref_id))throw fail(400,'Choose a supported PayChangu mobile-money operator.');
+ const quantities=new Map();
+ for(const item of input.items)quantities.set(item.listing_id,(quantities.get(item.listing_id)||0)+item.quantity);
+ const orderItems=[];
+ let total=0;
+ for(const [listingId,quantity] of quantities){
+  const listing=await db.get(joinListing+" WHERE l.id=? AND l.status='published' AND l.expiration_date>=?",[listingId,now().slice(0,10)]);
+  if(!listing)throw fail(404,'A selected listing is no longer available.');
+  if(quantity>Number(listing.available_volume))throw fail(400,`Requested quantity exceeds available supply for ${listing.title}.`);
+  const unitPrice=Number(listing.price);
+  total+=quantity*unitPrice;
+  orderItems.push({listing_id:listing.id,title:listing.title,quantity,unit_price:unitPrice,available_volume:Number(listing.available_volume),image:listing.image});
+ }
+ const amount=Math.round(total);
+ if(!Number.isSafeInteger(amount)||amount<1)throw fail(400,'The MWK order total must be at least one Kwacha.');
+ if(input.expected_total!==amount)return res.status(409).json({error:'Listing prices changed. Refresh the cart and review the updated total before paying.',amount,currency:'MWK',items:orderItems});
+ const orderId=randomUUID(),chargeId=`WF${randomUUID().replaceAll('-','').slice(0,24)}`,stamp=now();
+ await db.transaction(async tx=>{
+  await tx.run("INSERT INTO purchase_orders (id,buyer_id,amount,currency,status,payment_provider,provider_charge_id,email,mobile,created_at,updated_at) VALUES (?,?,?,'MWK','pending','paychangu',?,?,?,?,?)",[orderId,req.user.id,amount,chargeId,input.email,input.mobile,stamp,stamp]);
+  for(const item of orderItems)await tx.run('INSERT INTO purchase_order_items (id,order_id,listing_id,title,quantity,unit_price) VALUES (?,?,?,?,?,?)',[randomUUID(),orderId,item.listing_id,item.title,item.quantity,item.unit_price]);
+ });
+ const customerMobile=input.mobile;
+ // PayChangu's Malawi charge endpoint expects nine national digits, without +265.
+ input.mobile=customerMobile.slice(4);
+ let providerResponse;
+ try{
+  const response=await fetch('https://api.paychangu.com/mobile-money/payments/initialize',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:`Bearer ${secret}`},body:JSON.stringify({mobile:input.mobile,mobile_money_operator_ref_id:input.operator_ref_id,amount:String(amount),charge_id:chargeId,email:input.email,first_name:input.first_name,last_name:input.last_name})});
+  const providerBody=await response.text();
+  try{providerResponse=JSON.parse(providerBody);}catch{providerResponse=null;}
+  const providerStatus=normalizedPaymentStatus(providerResponse?.status),providerMessage=payChanguErrorMessage(providerResponse,[customerMobile,input.email]);
+  if(!response.ok||providerStatus!=='success'||!providerResponse?.data?.charge_id){
+   const responseFields=providerResponse&&typeof providerResponse==='object'?Object.keys(providerResponse).slice(0,8).join(', '):'none';
+   const reason=providerMessage||(!response.ok?`HTTP ${response.status}; response fields: ${responseFields}`:'The provider returned no charge ID.');
+   console.error('PayChangu initialization rejected.',{httpStatus:response.status,providerStatus:providerStatus||'unknown',responseType:providerResponse?'json':'unstructured',reason});
+   throw fail(502,`PayChangu rejected the payment request: ${reason}`);
+  }
+ }catch(error){
+  await db.run("UPDATE purchase_orders SET status='failed',updated_at=? WHERE id=? AND status='pending'",[now(),orderId]);
+  if(error.status)throw error;
+  throw fail(502,'Could not connect to PayChangu to start the payment. Check the API server connection and retry.');
+ }
+ const actualChargeId=String(providerResponse.data.charge_id);
+ if(actualChargeId!==chargeId)await db.run('UPDATE purchase_orders SET provider_charge_id=?,updated_at=? WHERE id=?',[actualChargeId,now(),orderId]);
+ res.status(201).json({order_id:orderId,charge_id:actualChargeId,amount,currency:'MWK',status:'pending',message:providerResponse.message||'Approve the payment request on your phone.'});
+});
+app.get('/api/v1/paychangu/verify',paymentLimit,permit('Buyer','Admin'),async(req,res)=>{
+ const chargeId=z.string().min(1).max(100).parse(req.query.charge_id);
+ const order=await db.get('SELECT * FROM purchase_orders WHERE provider_charge_id=?',[chargeId]);
+ if(!order||req.user.role!=='Admin'&&order.buyer_id!==req.user.id)throw fail(404,'Payment order not found.');
+ if(order.status==='paid'||order.status==='failed')return res.json({status:order.status,order_id:order.id});
+ const verified=await verifyPayChanguCharge(chargeId);
+ const status=await settlePurchase(order,verified);
+ res.json({status,order_id:order.id});
+});
+app.post('/api/v1/paychangu/webhook',async(req,res)=>{
+ const secret=process.env.PAYCHANGU_WEBHOOK_SECRET,signature=req.get('signature')?.replace(/^sha256=/i,'');
+ if(!secret||!req.rawBody||!signature)throw fail(401,'Invalid PayChangu webhook signature.');
+ const expected=createHmac('sha256',secret).update(req.rawBody).digest();
+ let received;try{received=Buffer.from(signature,'hex');}catch{received=Buffer.alloc(0);}
+ if(received.length!==expected.length||!timingSafeEqual(received,expected))throw fail(401,'Invalid PayChangu webhook signature.');
+ const event=req.body||{},payment=event.data||event.order||event,chargeId=String(payment.charge_id||'');
+ if(!chargeId)return res.status(200).json({received:true});
+ const order=await db.get('SELECT * FROM purchase_orders WHERE provider_charge_id=?',[chargeId]);
+ if(!order)return res.status(200).json({received:true});
+ const webhookStatus=normalizedPaymentStatus(payment.status||event.status);
+ if(webhookStatus==='success'){
+  const verified=await verifyPayChanguCharge(chargeId);
+  await settlePurchase(order,verified);
+ }else if(webhookStatus==='failed'){
+  await db.run("UPDATE purchase_orders SET status='failed',updated_at=? WHERE id=? AND status='pending'",[now(),order.id]);
+ }
+ res.status(200).json({received:true});
+});
+app.get('/api/v1/purchases',permit('Buyer','Admin'),async(req,res)=>{
+ const purchases=await db.all('SELECT id,amount,currency,status,payment_provider,provider_charge_id,created_at FROM purchase_orders'+(req.user.role==='Buyer'?' WHERE buyer_id=?':'')+' ORDER BY created_at DESC',req.user.role==='Buyer'?[req.user.id]:[]);
+ res.json(purchases);
+});
 const authLimit=rateLimit({windowMs:15*60*1000,limit:30,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many sign-in attempts. Try again in 15 minutes.'}});
 app.use('/api/v1/auth',authLimit);
 app.use(['/api/v1/auth/register','/api/v1/auth/login','/api/v1/auth/demo'],(req,res,next)=>clerkEnabled?next(fail(410,'Use Clerk to sign in or create your account.')):next());
 app.post('/api/v1/auth/onboard',async(req,res)=>{if(!clerkEnabled||!req.clerkUserId)throw fail(401,'Sign in with Clerk to continue.');const id=await createClerkProfile(db,req.clerkUserId,req.body);res.status(201).json(await publicUser(await db.get('SELECT * FROM users WHERE id=?',[id])));});
 async function session(res,u){const token=randomBytes(32).toString('hex');await db.run('INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,?)',[hash(token),u.id,new Date(Date.now()+604800000).toISOString()]); res.cookie('wirefen_session',token,{httpOnly:true,sameSite:'lax',secure:production,maxAge:604800000,path:'/'});return publicUser(u);}
 const phone=z.string().regex(/^\+[1-9]\d{7,14}$/,'Use an international phone number, such as +27821234567.');
-app.get('/api/v1/exchange-rates',rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false}),async(req,res)=>res.json(await getExchangeRates(process.env.CURRENCY || 'ZAR')));
-app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'South Africa (sample market)',currency:process.env.CURRENCY || 'ZAR',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}));
+app.get('/api/v1/exchange-rates',rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false}),async(req,res)=>res.json(await getExchangeRates(process.env.CURRENCY || 'MWK')));
+app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'Malawi (sample market)',currency:process.env.CURRENCY || 'MWK',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}));
 app.post('/api/v1/auth/register',async(req,res)=>{
  const v=z.object({name:z.string().trim().min(2).max(100),phone,password:z.string().min(10).max(128),role:z.enum(['Farmer','Buyer','Agent']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).optional(),country:z.string().trim().max(100).optional(),region:z.string().trim().max(100).optional(),district:z.string().trim().max(100).optional(),locality:z.string().trim().max(100).optional(),ward:z.string().trim().max(100).optional(),location:z.string().trim().max(100).optional()}).parse(req.body);
  if(await db.get('SELECT id FROM users WHERE phone=?',[v.phone])) throw fail(409,'This phone number already has an account. Sign in instead.');
@@ -271,18 +428,16 @@ app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
  else if(state?.last_question_asked==='cost_fertilizer_seeds'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Fertilizer and Seeds, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_fertilizer_seeds,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_fertilizer_seeds=excluded.cost_fertilizer_seeds,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_labor',now()]);message='Fertilizer & seeds spend saved. Step 2/4: Expected spend for Labor (planting and maintenance)? Reply with an amount, or 0.';}}
  else if(state?.last_question_asked==='cost_labor'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Labor, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_labor,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_labor=excluded.cost_labor,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_processing',now()]);message='Labor spend saved. Step 3/4: Expected spend for Processing (harvest prep for storage)? Reply with an amount, or 0.';}}
  else if(state?.last_question_asked==='cost_processing'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Processing, or reply 0 to skip.';else{await db.run("INSERT INTO historical_baselines (farmer_id,cost_processing,status,updated_at) VALUES (?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_processing=excluded.cost_processing,status='draft',updated_at=excluded.updated_at",[farm.id,value,now()]);await db.run('INSERT INTO conversational_state VALUES (?,?,?,?) ON CONFLICT(user_phone) DO UPDATE SET current_form_id=excluded.current_form_id,last_question_asked=excluded.last_question_asked,timestamp=excluded.timestamp',[From,'baseline','cost_transportation',now()]);message='Processing spend saved. Step 4/4: Expected spend for Transportation (moving produce from farm)? Reply with an amount, or 0.';}}
- else if(state?.last_question_asked==='cost_transportation'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Transportation, or reply 0 to skip.';else{const row=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[farm.id])||{};const total=(Number(row.cost_fertilizer_seeds)||0)+(Number(row.cost_labor)||0)+(Number(row.cost_processing)||0)+value;await db.run("INSERT INTO historical_baselines (farmer_id,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status='draft',updated_at=excluded.updated_at",[farm.id,value,total,now()]);await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);message=`Transportation spend saved. Financial estimation complete! Total Estimated Cost: ${process.env.CURRENCY||'ZAR'} ${total}. Complete the remaining baseline fields on Wirefen.`;}}
+ else if(state?.last_question_asked==='cost_transportation'&&Date.now()-Date.parse(state.timestamp)<86400000){const value=parseCost(Body);if(value===null)message='Enter a positive spend for Transportation, or reply 0 to skip.';else{const row=await db.get('SELECT * FROM historical_baselines WHERE farmer_id=?',[farm.id])||{};const total=(Number(row.cost_fertilizer_seeds)||0)+(Number(row.cost_labor)||0)+(Number(row.cost_processing)||0)+value;await db.run("INSERT INTO historical_baselines (farmer_id,cost_transportation,avg_production_cost,status,updated_at) VALUES (?,?,?,'draft',?) ON CONFLICT(farmer_id) DO UPDATE SET cost_transportation=excluded.cost_transportation,avg_production_cost=excluded.avg_production_cost,status='draft',updated_at=excluded.updated_at",[farm.id,value,total,now()]);await db.run('DELETE FROM conversational_state WHERE user_phone=?',[From]);message=`Transportation spend saved. Financial estimation complete! Total Estimated Cost: ${process.env.CURRENCY||'MWK'} ${total}. Complete the remaining baseline fields on Wirefen.`;}}
  else message='Reply BASELINE to record average yield, COST for financial breakdown, or STOP to opt out.';
  await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);xml(message);
 });
 app.use('/api',(req,res)=>res.status(404).json({error:'API endpoint not found.'}));
-if(existsSync(resolve('dist/index.html'))){app.use(express.static(resolve('dist')));app.get('/{*path}',(req,res)=>res.sendFile(resolve('dist/index.html')));}
 app.use((err,req,res,next)=>{if(err instanceof z.ZodError)return res.status(400).json({error:err.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; '),fields:err.issues});if(err.code==='23505'||err.code==='ERR_SQLITE_ERROR'&&String(err.message).includes('UNIQUE'))return res.status(409).json({error:'This record already exists.'});if(!err.status)console.error(err);res.status(err.status||500).json({error:err.status?err.message:'Something went wrong. Please try again.'});});
 if(process.env.NODE_ENV!=='test'){
- const host=process.env.HOST||'127.0.0.1',port=Number(process.env.PORT||3001);
+ const host=process.env.API_HOST||process.env.HOST||'127.0.0.1',port=Number(process.env.API_PORT||process.env.PORT||3001);
  const server=app.listen(port,host,()=>console.log(`Wirefen API: http://${host}:${port}`));
  let stopping=false;
  const shutdown=()=>{if(stopping)return;stopping=true;const deadline=setTimeout(()=>process.exit(1),10000);deadline.unref();server.close(async()=>{try{await db.close();clearTimeout(deadline);process.exit(0);}catch{process.exit(1);}});server.closeIdleConnections();};
  process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
 }
-

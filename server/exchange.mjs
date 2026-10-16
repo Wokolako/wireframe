@@ -1,7 +1,7 @@
 const HOUR = 60 * 60 * 1000;
 const MAX_AGE = 7 * 24 * HOUR;
 const REGIONAL_RATES = {
-  MWK: 1885.5, // 1 EUR ≈ 1,885.5 Malawian Kwacha
+  MWK: 1942.07, // 1 EUR ≈ 1,942.07 Malawian Kwacha
   ZMW: 29.5    // 1 EUR ≈ 29.5 Zambian Kwacha
 };
 

@@ -2,64 +2,72 @@
 
 Wirefen agricultural marketplace and lifecycle platform.
 
-Phase 1 agricultural marketplace: React/TypeScript client, independently served Express REST API, PostgreSQL support, and a zero-configuration SQLite development database.
+Phase 1 agricultural marketplace: Next.js/React/TypeScript frontend, independently served Express REST API, PostgreSQL support, and a zero-configuration SQLite development database.
 
 ## Presentation version (current default)
 
-Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and EUR/USD example rates remain browser-local dummy data. The frontend does not call the Wirefen Node API, SMS gateway or currency provider. The Node backend remains in `server/` for later activation.
+Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and exchange rates remain browser-local sample data. In this presentation mode checkout is unavailable; enable the authenticated backend to use PayChangu with live MWK listings.
 
 ```powershell
 npm.cmd install
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173. For the installable presentation build:
+This starts both the Next.js frontend on http://127.0.0.1:3000 and the Express API using the configured `API_PORT`. For the installable presentation build:
 
 ```powershell
 npm.cmd run build
 npm.cmd start
 ```
 
-Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
+Open http://127.0.0.1:3000. The Next.js server hosts the presentation frontend. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
 
 ## Connect the existing backend later
 
-Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. The admin designation currently controls the dummy-data workspace only. When enabling the Node API, provision/link the admin with the documented server-side admin scripts; the API continues to enforce its database roles.
+Set `NEXT_PUBLIC_USE_BACKEND=true` in `.env` and rebuild the frontend. Use `npm.cmd run dev:full` for both development servers. `npm.cmd run start` runs the Next.js frontend and Express API together; the frontend is available on port 3000, and `/api` requests are proxied to the API on port 3001. Clerk keys and the database are read by the backend only in that connected workflow. The admin designation currently controls the dummy-data workspace only. When enabling the Node API, provision/link the admin with the documented server-side admin scripts; the API continues to enforce its database roles.
 
-The launch market is still a configurable sample (South Africa/ZAR). Do not treat presentation exchange rates or records as live data.
+The configured launch market defaults to Malawi/MWK. Presentation records and exchange rates are illustrative only; backend checkout is disabled while sample seeding is enabled. Replace sample records and prices with verified MWK listings before enabling live payments.
 
 ## Features
 
 - Public catalogue with search, category, minimum/maximum volume, harvest-date and preservative filters; sorting, grid/list views, local saved produce, and listing detail routes.
-- Buyer order inquiries persist to a staff queue. Admins progress New → In review → Contacted → Closed. No checkout or payment is implied.
+- Buyer order inquiries persist to a staff queue. Admins progress New → In review → Contacted → Closed. Buyers can also add produce to a cart and pay for available quantities through PayChangu mobile money when the authenticated backend is enabled.
 - Farmer workspace, three-step listing creation and four-step historical baseline collection. Baseline PATCH requests preserve previous fields; both wizards persist partial drafts on the server and device.
 - Admin farmer directory, CSV export, farmer selection, and assisted baseline/listing entry under server-enforced authorization.
 - Clerk session authentication with bearer tokens, server-owned role/ownership checks, E.164 contact profiles, input validation, allowed-origin checks, and authentication/SMS rate limits. Legacy local authentication is available only when Clerk is not configured.
 - Timestamped consent audit trail with account changes and SMS START/STOP handling.
+- PayChangu checkout creates provider-neutral purchase records, validates MWK totals and stock on the server, verifies charge status independently before marking an order paid, and accepts HMAC-SHA256 signed webhooks. Stock is decremented once only after verified payment; Stripe is not included.
 - Twilio SDK outbound adapter and signature-validated inbound webhook, message deduplication, conversational state, and a minimal BASELINE → yield draft flow. Full conversational mapping remains Phase 2.
 - Installable PWA, local fonts and images, app-shell/public-catalogue caching, offline baseline reopening and reconnect sync. Private API responses are never service-worker cached.
 
 ## Configuration and production
 
-The ignored local `.env` contains your supplied Clerk development keys. Never commit it. For another environment, copy `.env.example` and provide that environment?s credentials. The secret stays on the API server; `/api/v1/config` exposes only the publishable key. In backend mode the React/Vite app loads the public key at runtime. Static presentation mode uses VITE_CLERK_PUBLISHABLE_KEY or the public development fallback in src/auth-config.ts.
+Local development settings belong in the ignored `.env` file; never commit credentials. For other environments, provide secrets through the deployment platform's secret manager. The API keeps secret keys server-side; `/api/v1/config` exposes only the Clerk publishable key. Backend mode uses the public key supplied at runtime by the API. Presentation mode uses `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` or the public development fallback in `src/auth-config.ts`.
 
 | Variable | Purpose |
 | --- | --- |
-| `PORT` | API/static server port; default 3001 |
+| `PORT` | Next.js frontend port; default 3000 |
+| `API_PORT` | Express API port; default 3001 |
 | `APP_ORIGIN` | Comma-separated exact allowed browser origins; required for Clerk in production |
-| `CLERK_PUBLISHABLE_KEY` | Public Clerk instance key; VITE_/NEXT_PUBLIC_ aliases are also accepted by the API |
+| `CLERK_PUBLISHABLE_KEY` | Public Clerk instance key; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is also accepted by the API |
+| `NEXT_PUBLIC_USE_BACKEND` | Build-time client setting; set to `true` to use the Express API instead of presentation data |
+| `API_BASE_URL` | Build-time Next.js rewrite target for `/api` requests; set before rebuilding; default `http://127.0.0.1:3001` |
 | `CLERK_SECRET_KEY` | Server-only Clerk API credential; configure together with the public key |
 | `DATABASE_URL` | PostgreSQL connection URL; absent uses `data/wirefen.sqlite` locally |
 | `NODE_ENV` | Set `production` to disable demo access and enable Secure cookies |
 | `SEED_DEMO` | Set `false` to disable sample seeding outside production |
 | `MARKET_NAME` | Human-readable launch market |
-| `CURRENCY` | ISO 4217 currency code, default sample `ZAR` |
+| `CURRENCY` | ISO 4217 currency code, default `MWK`; PayChangu checkout requires MWK |
+| `PAYCHANGU_SECRET_KEY` | Server-only PayChangu API secret; never expose to the browser or commit it |
+| `PAYCHANGU_WEBHOOK_SECRET` | Server-only secret used to authenticate the PayChangu `Signature` HMAC header |
 | `TWILIO_ACCOUNT_SID` | Twilio account for outbound messages |
 | `TWILIO_AUTH_TOKEN` | Twilio SDK/signature-validation credential |
 | `TWILIO_PHONE_NUMBER` | Provisioned sender number |
 | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL, including path, used for request signature validation |
 
-Deploy the web build and API behind HTTPS at the same origin (the frontend only accesses the API via HTTP). In separate infrastructure, proxy `/api/v1` to the API; the API remains independently usable by other clients. The server binds to loopback by default, suitable for a reverse proxy. Use a fresh PostgreSQL database for production rather than copying sample data. Schema creation runs idempotently at startup; subsequent production schema changes should use reviewed migrations and backups.
+Deploy the Next.js frontend and API behind HTTPS at the same origin; Next.js rewrites `/api` requests to the Express API. The API remains independently usable by other clients. The API binds to loopback by default, suitable for a reverse proxy. Use a fresh PostgreSQL database for production rather than copying sample data. Schema creation runs idempotently at startup; subsequent production schema changes should use reviewed migrations and backups.
+
+To enable real PayChangu checkout, configure both PayChangu secrets on the API server, set `CURRENCY=MWK`, enable backend mode, and set `SEED_DEMO=false`. Checkout phone numbers must be Malawi E.164 (`+265` followed by nine digits); the server stores that number and sends the nine national digits to PayChangu's charge endpoint. Update all existing listing prices to actual MWK amounts first: the checkout takes its total from the persisted listing prices and never converts ZAR prices. Configure PayChangu's webhook URL as `https://<your-domain>/api/paychangu/webhook`. Test initialization, phone approval, verification, and webhook delivery using PayChangu's test credentials before enabling live credentials. Rotate any credentials that may have been exposed.
 
 To bootstrap an admin, supply `ADMIN_NAME`, `ADMIN_PHONE` (E.164), and `ADMIN_PASSWORD` (at least 14 characters) through a secure process environment, then run:
 
@@ -159,6 +167,6 @@ A Dockerfile and PostgreSQL Compose service are included. Set production Clerk k
 
 GitHub Actions runs dependency installation, all backend tests, and the production build. Run `node tests/pwa-ui.mjs` for first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation checks. Run `npm.cmd run test:ui` for the full marketplace flow.
 
-Presentation validation: `npm.cmd run test:presentation` launches a static-only server, blocks Wirefen `/api/` requests, and checks the dummy catalogue/converter, live Clerk dialogs and phone layout. `node --env-file=.env tests/clerk-registration-ui.mjs` creates a temporary Clerk development test account through the real registration form, verifies email, completes onboarding, signs out/in, and deletes that test account. No real emails are sent. Unit tests check the verified-email admin rule and local profile isolation. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require a frontend built with `VITE_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
+Presentation validation: `npm.cmd run test:presentation` checks the dummy catalogue/converter, live Clerk dialogs and phone layout. `node --env-file=.env tests/clerk-registration-ui.mjs` creates a temporary Clerk development test account through the real registration form, verifies email, completes onboarding, signs out/in, and deletes that test account. No real emails are sent. Unit tests check the verified-email admin rule and local profile isolation. Backend integration browser tests (`test:ui`, `test:pwa`, `test:currency-ui`) start an isolated Express API and Next.js server and require a frontend built with `NEXT_PUBLIC_USE_BACKEND=true`. Clerk smoke tests use the running Next.js app (`TEST_URL` can override its default `http://127.0.0.1:3000`); `npm.cmd test` tests backend modules independently.
 
-Clerk configuration: `src/auth-config.ts` contains only the public development instance identifier as a fallback for static deployments; `VITE_CLERK_PUBLISHABLE_KEY` overrides it. The secret is never bundled. Development-instance restrictions still apply; use production Clerk keys and configured domains when going live. Marketplace demo data remains separate from Clerk accounts.
+Clerk configuration: `src/auth-config.ts` contains only the public development instance identifier as a fallback for presentation mode; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` overrides it. The secret is never bundled. Development-instance restrictions still apply; use production Clerk keys and configured domains when going live. Marketplace demo data remains separate from Clerk accounts.

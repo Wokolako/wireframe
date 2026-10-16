@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 const storage=new Map();globalThis.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
-const compiled=await build({entryPoints:['src/demo.ts'],bundle:true,platform:'node',format:'esm',write:false,define:{'import.meta.env':'{}'}});
+const compiled=await build({entryPoints:['src/demo.ts'],bundle:true,platform:'node',format:'esm',write:false});
 const {demoApi,setDemoIdentity}=await import('data:text/javascript;base64,'+Buffer.from(compiled.outputFiles[0].text).toString('base64'));
 const post=(path,body)=>demoApi(path,{method:'POST',body:JSON.stringify(body)});
 test('real identity is required and old sample role bypasses are rejected',async()=>{

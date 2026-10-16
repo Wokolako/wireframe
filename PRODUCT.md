@@ -33,4 +33,4 @@ South Africa and ZAR are provisional sample-market choices. Production database 
 Responsive mobile-first web interface, keyboard access, visible focus, labeled forms, high contrast, reduced motion, and recoverable errors.
 
 ## Current delivery mode
-Presentation mode is now the default at the user?s request. Clerk handles real login/registration; listings and activity use browser-local dummy data without calling the Wirefen API. The verified email georgechivalo01@gmail.com selects the dummy Admin workspace. New users choose Buyer/Farmer in local profile onboarding. Node backend implementation is retained for later. Enable VITE_USE_BACKEND=true only when reconnecting deliberately.
+Presentation mode is now the default at the user?s request. Clerk handles real login/registration; listings and activity use browser-local dummy data without calling the Wirefen API. The verified email georgechivalo01@gmail.com selects the dummy Admin workspace. New users choose Buyer/Farmer in local profile onboarding. Node backend implementation is retained for later. Enable NEXT_PUBLIC_USE_BACKEND=true and rebuild only when reconnecting deliberately.

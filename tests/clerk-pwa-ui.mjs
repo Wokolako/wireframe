@@ -1,7 +1,7 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
-const base=process.env.TEST_URL||'http://127.0.0.1:3001';
+const base=process.env.TEST_URL||'http://127.0.0.1:3000';
 await mkdir('test-results',{recursive:true});
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const context=await browser.newContext({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
