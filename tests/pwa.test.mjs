@@ -1,7 +1,7 @@
 import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
 process.env.NODE_ENV='test';process.env.SQLITE_PATH=':memory:';
-const {app}=await import('../server/index.mjs');const {db}=await import('../server/db.mjs');
+const {app,db}=await import('./helpers/test-api.mjs').then(module=>module.loadTestApi());
 const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
 const base=`http://127.0.0.1:${server.address().port}/api/v1`;
 after(async()=>{await new Promise(r=>server.close(r));await db.close();});

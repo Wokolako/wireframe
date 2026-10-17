@@ -6,16 +6,17 @@ Phase 1 agricultural marketplace: a Next.js App Router frontend, Express REST AP
 
 ## Live backend with Neon
 
-Set `NEXT_PUBLIC_USE_BACKEND=true`, `USE_BACKEND=true`, and `SEED_DEMO=false` in `.env`. Set a Neon pooled `DATABASE_URL` and matching Clerk keys, then run:
+Set `NEXT_PUBLIC_USE_BACKEND=true`, `USE_BACKEND=true`, and `SEED_DEMO=false` in `.env`. Set `DATABASE_DRIVER=neon`, a Neon pooled `DATABASE_URL`, and matching Clerk keys. Apply schema migrations as a separate deployment step before starting the app:
 
 ```powershell
 npm.cmd install
+npm.cmd run db:migrate
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:3000. The Next.js Node server handles both pages and `/api/v1/*`; live mode refuses to start without `DATABASE_URL` and does not silently use SQLite. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the app to refresh its in-memory limit lookup.
+Open http://127.0.0.1:3000. The Next.js Node server handles both pages and `/api/v1/*`; live mode refuses to start without `DATABASE_URL` and does not silently use SQLite. Startup checks the schema version but does not apply DDL; run `npm.cmd run db:migrate` with a migration-capable database identity before each application deployment. For legacy listing prices without a recorded currency, set `LEGACY_PRICE_CURRENCY` to their actual currency before migrating; migration intentionally refuses to guess. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the app to refresh its in-memory limit lookup.
 
-Guest household checkout places an order without an account using pay on delivery. Staff confirm stock and delivery, then record collected payment in the admin queue. No external payment provider is required for this method.
+Guest household checkout places an order without an account. Pay on delivery remains available everywhere. For Malawi, configure `CURRENCY=MWK`, verified MWK listing prices, and server-side `PAYCHANGU_SECRET_KEY` plus `PAYCHANGU_WEBHOOK_SECRET` to show PayChangu mobile money. PayChangu checkouts must total a whole Kwacha. Wirefen confirms stock first; only then can the customer start a mobile-money request. The customer’s checkout page polls server-side PayChangu verification, while the signed webhook provides an additional settlement path. PayChangu credentials are never exposed to the browser. Stripe/Europe is not configured.
 
 Available stock and supplier locations are restricted to admin reports. The original specification's public `min_volume` and `max_volume` filters are intentionally unavailable to buyers because repeated filter queries would reveal hidden inventory.
 
@@ -72,16 +73,21 @@ The ignored local `.env` contains your supplied Clerk development keys. Never co
 | `CLERK_PUBLISHABLE_KEY` | Public Clerk instance key; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is also accepted |
 | `CLERK_SECRET_KEY` | Server-only Clerk API credential; configure together with the public key |
 | `DATABASE_URL` | PostgreSQL connection URL; absent uses `data/wirefen.sqlite` locally |
+| `DATABASE_DRIVER` | Required with `DATABASE_URL`: `neon` or `postgres`; the app does not infer a driver |
+| `LEGACY_PRICE_CURRENCY` | Actual currency for pre-migration listing prices that have no currency label; required only when such rows exist |
 | `NODE_ENV` | Set `production` to disable demo access and enable Secure cookies |
 | `SEED_DEMO` | Set `false` to disable sample seeding outside production |
 | `MARKET_NAME` | Human-readable launch market |
 | `CURRENCY` | ISO 4217 currency code, default sample `ZAR` |
+| `PAYCHANGU_SECRET_KEY` | Server-only PayChangu API key; required with `CURRENCY=MWK` to enable mobile money |
+| `PAYCHANGU_WEBHOOK_SECRET` | Server-only secret used to validate PayChangu webhook signatures |
+| `PAYCHANGU_TEST_MODE` | Set `true` only to exercise sandbox credentials while non-production demo data is enabled |
 | `TWILIO_ACCOUNT_SID` | Twilio account for outbound messages |
 | `TWILIO_AUTH_TOKEN` | Twilio SDK/signature-validation credential |
 | `TWILIO_PHONE_NUMBER` | Provisioned sender number |
 | `TWILIO_WEBHOOK_URL` | Exact public HTTPS URL, including path, used for request signature validation |
 
-Deploy the web build and API behind HTTPS at the same origin (the frontend only accesses the API via HTTP). In separate infrastructure, proxy `/api/v1` to the API; the API remains independently usable by other clients. The server binds to loopback by default, suitable for a reverse proxy. Use a fresh PostgreSQL database for production rather than copying sample data. Schema creation runs idempotently at startup; subsequent production schema changes should use reviewed migrations and backups.
+Deploy the web build and API behind HTTPS at the same origin (the frontend only accesses the API via HTTP). In separate infrastructure, proxy `/api/v1` to the API; the API remains independently usable by other clients. The server binds to loopback by default, suitable for a reverse proxy. Use a fresh PostgreSQL database for production rather than copying sample data. Apply reviewed versioned migrations before application startup and back up existing data first.
 
 To bootstrap an admin, supply `ADMIN_NAME`, `ADMIN_PHONE` (E.164), and `ADMIN_PASSWORD` (at least 14 characters) through a secure process environment, then run:
 
@@ -109,6 +115,11 @@ All responses are JSON except the SMS webhook, which returns TwiML. Send JSON wi
 | GET | `/api/v1/listings` | Public; category, min_volume, max_volume, harvest_date_after, preservative, search; mine=true requires auth |
 | GET | `/api/v1/listings/:id` | Public |
 | POST | `/api/v1/listings` | Farmer owner or Admin |
+| POST | `/api/v1/guest-orders/basket` | Public household checkout; supports pay on delivery and configured PayChangu (MWK) |
+| GET | `/api/v1/guest-orders/:id/payment-status` | Checkout ID bearer token; returns sanitized status and verifies pending PayChangu payments server-side |
+| GET | `/api/v1/paychangu/operators` | Public when PayChangu is enabled; returns Malawi mobile-money operators |
+| POST | `/api/v1/paychangu/initialize` | Checkout ID bearer token; starts payment only after staff confirms stock |
+| POST | `/api/v1/paychangu/webhook` | PayChangu; HMAC-signed webhook verified against the provider before settlement |
 | POST | `/api/v1/orders` | Buyer |
 | GET | `/api/v1/orders` | Buyer sees own; Admin sees all |
 | PATCH | `/api/v1/orders/:id` | Admin; status |
@@ -128,7 +139,7 @@ Database tables: users, farmer_profiles, historical_baselines, listings, listing
 
 ## Offline behavior
 
-The Currency converter supports EUR, USD and the configured market currency. The header selector converts catalogue, shortlist, detail and farm-listing prices for display; persisted prices and farmer cost-entry forms stay in the market currency. Rates come from [Frankfurter](https://frankfurter.dev/), through `GET /api/v1/exchange-rates`. The API coalesces concurrent requests and caches rates for an hour. Dated fallback rates are explicitly labeled and expire after seven days. The browser remembers display preference and rates for offline use. Conversions are estimates and do not set payment terms.
+The Currency converter supports EUR, USD, MWK, ZMW, and ZAR when each quote is available. The header selector converts catalogue, shortlist, detail and farm-listing prices for display; persisted prices and farmer cost-entry forms stay in the listing currency. Rates come from [Frankfurter v2](https://frankfurter.dev/), through `GET /api/v1/exchange-rates`; the API records the actual effective date and source for each quote. It coalesces concurrent requests and caches rates for an hour. Missing or older-than-seven-day quotes are unavailable, while still-current saved quotes are explicitly labeled during an outage. The browser remembers display preference and rates for offline use. Conversions are indicative estimates and do not set payment terms.
 
 Visit online once to install/cache the shell. Previously loaded catalogue requests can be reopened offline. The browser keeps a minimal last-session display snapshot to reopen its own saved draft; this does not authorize server operations. Actual API access is always checked by the server. Baseline and listing drafts are scoped to account + farmer and synchronized on reconnect. Final submissions need connectivity. Multiple-device concurrent draft edits use last-write-wins in Phase 1. Clearing site data removes unsynced drafts. Saved produce is a browser-local shortlist.
 
@@ -175,9 +186,9 @@ An installed state is monotonic: future dismissals cannot erase it. Signing in m
 
 ## Node backend and deployment
 
-The Next.js Node server delivers the app and mounts the Express 5 API at `/api/*`: Clerk/local authentication, profile onboarding, role and farm ownership checks, baseline/listing draft persistence, searchable catalogue, produce creation, buyer inquiries, admin order progression, consent records, signed SMS webhook, currency rates, and persistent install sessions. PostgreSQL and SQLite use the same relational schema. `GET /api/v1/health` checks database connectivity. The API's database initializes on first request and remains in the Next.js process.
+The Next.js Node server delivers the app and mounts the Express 5 API at `/api/*`: Clerk/local authentication, profile onboarding, role and farm ownership checks, baseline/listing draft persistence, searchable catalogue, produce creation, buyer inquiries, admin order progression, consent records, signed SMS webhook, currency rates, and persistent install sessions. PostgreSQL and SQLite use the same relational schema. `GET /api/v1/health` checks database connectivity. Versioned schema changes run through `npm.cmd run db:migrate` as a deployment step; API startup only verifies that the database is current and fails with a migration instruction if it is not.
 
-A Dockerfile and PostgreSQL Compose service are included. Set `NEXT_PUBLIC_USE_BACKEND=true` at build time and `USE_BACKEND=true` at runtime, production Clerk keys, an exact HTTPS `APP_ORIGIN`, and a long URL-safe `POSTGRES_PASSWORD`, then use `docker compose up --build -d`. The standalone Next.js Node server serves both pages and APIs. Terminate HTTPS at your reverse proxy; the app port is bound to host loopback. `TRUST_PROXY_HOPS=1` assumes exactly one trusted proxy; adjust to your real deployment. Runtime credentials are injected into the container and excluded from the image build. Configure Twilio credentials before sending SMS. Back up the PostgreSQL volume and use a shared/edge rate limiter for multiple API instances. Container/PostgreSQL deployment configuration is provided but was not executed on this workstation.
+A Dockerfile and PostgreSQL Compose services are included. Set `NEXT_PUBLIC_USE_BACKEND=true` at build time and production Clerk keys, an exact HTTPS `APP_ORIGIN`, and long URL-safe migration/runtime database passwords, then use `docker compose up --build -d`. Compose waits for a one-off migration service to apply schema changes and grant data-only privileges to the app's runtime role before starting the app. Terminate HTTPS at your reverse proxy; the app port is bound to host loopback. `TRUST_PROXY_HOPS=1` assumes exactly one trusted proxy; adjust to your real deployment. Runtime credentials are injected into the container and excluded from the image build. Configure Twilio credentials before sending SMS. Back up the PostgreSQL volume and use a shared/edge rate limiter for multiple API instances. Container/PostgreSQL deployment configuration is provided but was not executed on this workstation.
 
 GitHub Actions runs dependency installation, all backend tests, and the production build. Browser checks start a Next.js development server with an isolated SQLite database; `node tests/pwa-ui.mjs` checks first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation behavior. Run `npm.cmd run test:ui` for Next.js routing, API health, catalogue filtering, and mobile-layout checks.
 

@@ -1,0 +1,310 @@
+[
+  {
+    "id": "crop-001",
+    "name": "Maize (Dry Hard Grain)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 25
+  },
+  {
+    "id": "crop-002",
+    "name": "Maize Flour (Ufa)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 25
+  },
+  {
+    "id": "crop-003",
+    "name": "Maize (Fresh on the Cob)",
+    "category": "Grains",
+    "unit": "cobs",
+    "max": 28
+  },
+  {
+    "id": "crop-004",
+    "name": "Rice (Paddy & Milled)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 20
+  },
+  {
+    "id": "crop-005",
+    "name": "Sorghum (dry)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-006",
+    "name": "Pearl Millet (dry)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-007",
+    "name": "Wheat (dry)",
+    "category": "Grains",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-008",
+    "name": "Cassava (Fresh Root)",
+    "category": "Tubers",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-009",
+    "name": "Cassava Powder (Kondowole)",
+    "category": "Tubers",
+    "unit": "kg",
+    "max": 15
+  },
+  {
+    "id": "crop-010",
+    "name": "Sweet Potatoes (fresh)",
+    "category": "Tubers",
+    "unit": "kg",
+    "max": 15
+  },
+  {
+    "id": "crop-011",
+    "name": "Irish Potatoes (fresh)",
+    "category": "Tubers",
+    "unit": "kg",
+    "max": 15
+  },
+  {
+    "id": "crop-012",
+    "name": "Yams (Zikhu) (fresh)",
+    "category": "Tubers",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-013",
+    "name": "Groundnuts (Peanuts) (fresh)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-014",
+    "name": "Groundnuts (Peanuts) (dried)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-015",
+    "name": "Groundnuts (Peanuts) Powder (nsinjiro)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-016",
+    "name": "Dried Soya Beans",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-017",
+    "name": "Dry Beans (e.g., Kidney, Sugar Beans)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 15
+  },
+  {
+    "id": "crop-018",
+    "name": "Fresh Beans (e.g., Kidney, Sugar Beans)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-019",
+    "name": "Green beans (zitheba)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-020",
+    "name": "Fresh Beans: Sold in pods",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-021",
+    "name": "Pigeon Peas (Nandolo)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-022",
+    "name": "Cowpeas (Khobwe)",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 10
+  },
+  {
+    "id": "crop-023",
+    "name": "Sunflower Seeds",
+    "category": "Legumes",
+    "unit": "kg",
+    "max": 3
+  },
+  {
+    "id": "crop-024",
+    "name": "Tomatoes",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 2
+  },
+  {
+    "id": "crop-025",
+    "name": "Onions",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 3
+  },
+  {
+    "id": "crop-026",
+    "name": "Chilli Peppers assorted",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 0.5
+  },
+  {
+    "id": "crop-027",
+    "name": "Mustard Greens (Mpiru)",
+    "category": "Vegetables",
+    "unit": "bundles",
+    "max": 14
+  },
+  {
+    "id": "crop-028",
+    "name": "Pumpkin Leaves (Mkhwani)",
+    "category": "Vegetables",
+    "unit": "bundles",
+    "max": 14
+  },
+  {
+    "id": "crop-029",
+    "name": "Cabbage",
+    "category": "Vegetables",
+    "unit": "heads",
+    "max": 5
+  },
+  {
+    "id": "crop-030",
+    "name": "Garlic",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 0.5
+  },
+  {
+    "id": "crop-031",
+    "name": "Green Peppers",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 1.5
+  },
+  {
+    "id": "crop-032",
+    "name": "Okra (Therere)",
+    "category": "Vegetables",
+    "unit": "kg",
+    "max": 2
+  },
+  {
+    "id": "crop-033",
+    "name": "Mangoes (Ripe)",
+    "category": "Fruits",
+    "unit": "fruits",
+    "max": 28
+  },
+  {
+    "id": "crop-034",
+    "name": "Bananas",
+    "category": "Fruits",
+    "unit": "bunches",
+    "max": 3
+  },
+  {
+    "id": "crop-035",
+    "name": "Citrus Oranges",
+    "category": "Fruits",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-036",
+    "name": "Tangerines",
+    "category": "Fruits",
+    "unit": "kg",
+    "max": 5
+  },
+  {
+    "id": "crop-037",
+    "name": "Avocados",
+    "category": "Fruits",
+    "unit": "fruits",
+    "max": 14
+  },
+  {
+    "id": "crop-038",
+    "name": "Pineapples",
+    "category": "Fruits",
+    "unit": "fruits",
+    "max": 4
+  },
+  {
+    "id": "crop-039",
+    "name": "Pawpaws (Papaya)",
+    "category": "Fruits",
+    "unit": "fruits",
+    "max": 4
+  },
+  {
+    "id": "crop-040",
+    "name": "Guavas",
+    "category": "Fruits",
+    "unit": "kg",
+    "max": 3
+  },
+  {
+    "id": "crop-041",
+    "name": "Sugarcane",
+    "category": "Fruits",
+    "unit": "canes",
+    "max": 14
+  },
+  {
+    "id": "crop-042",
+    "name": "Tea",
+    "category": "Beverages & Nuts",
+    "unit": "kg",
+    "max": 1
+  },
+  {
+    "id": "crop-043",
+    "name": "Macadamia Nuts",
+    "category": "Beverages & Nuts",
+    "unit": "kg",
+    "max": 2
+  },
+  {
+    "id": "crop-044",
+    "name": "Coffee (dry uncooked beans)",
+    "category": "Beverages & Nuts",
+    "unit": "kg",
+    "max": 2
+  }
+]

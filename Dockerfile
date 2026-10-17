@@ -14,6 +14,8 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
+COPY --from=build --chown=node:node /app/server/migrate.mjs ./server/migrate.mjs
+COPY --from=build --chown=node:node /app/server/grant-runtime.mjs ./server/grant-runtime.mjs
 RUN rm -f .env .env.local .env.production .env.production.local && mkdir -p data && chown -R node:node /app
 USER node
 EXPOSE 3001

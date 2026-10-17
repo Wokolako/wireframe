@@ -4,12 +4,14 @@
  */
 import {Pool,neonConfig} from '@neondatabase/serverless';
 import {randomUUID} from 'node:crypto';
+import catalogue from '../shared/catalogue.json' with {type:'json'};
 
 const databaseUrl=process.env.DATABASE_URL;
 if(!databaseUrl)throw new Error('DATABASE_URL is required.');
 if(!new URL(databaseUrl).hostname.endsWith('.neon.tech'))throw new Error('The limits import requires a Neon DATABASE_URL.');
 neonConfig.webSocketConstructor=WebSocket;
 const pool=new Pool({connectionString:databaseUrl,connectionTimeoutMillis:15000});
+const catalogueByName=new Map(catalogue.map(item=>[item.name.toLowerCase(),item]));
 
 function shelfLifeToDays(value){
   const match=String(value||'').trim().match(/^(\d+)(?:\s*[-\u2013]\s*(\d+))?\s*(day|week|month)/i);
@@ -74,6 +76,7 @@ async function main() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS guest_order_limits (
         id TEXT PRIMARY KEY,
+        produce_id TEXT,
         category TEXT NOT NULL,
         produce_item TEXT NOT NULL UNIQUE,
         shelf_life TEXT NOT NULL,
@@ -85,17 +88,20 @@ async function main() {
       )
     `);
     for (const [category, produce_item, shelf_life, max_quantity, unit, requirement] of excelRows) {
+      const produce=catalogueByName.get(produce_item.toLowerCase());
+      if(!produce)throw new Error(`No catalogue identity for household limit "${produce_item}".`);
       await client.query(
-        `INSERT INTO guest_order_limits (id, category, produce_item, shelf_life, shelf_life_days, max_quantity, unit, requirement)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO guest_order_limits (id, produce_id, category, produce_item, shelf_life, shelf_life_days, max_quantity, unit, requirement)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (produce_item) DO UPDATE SET
+           produce_id = EXCLUDED.produce_id,
            category = EXCLUDED.category,
            shelf_life = EXCLUDED.shelf_life,
            shelf_life_days = EXCLUDED.shelf_life_days,
            max_quantity = EXCLUDED.max_quantity,
            unit = EXCLUDED.unit,
            requirement = EXCLUDED.requirement`,
-        [randomUUID(), category, produce_item, shelf_life, shelfLifeToDays(shelf_life), max_quantity, unit, requirement]
+        [randomUUID(), produce.id, category, produce_item, shelf_life, shelfLifeToDays(shelf_life), max_quantity, unit, requirement]
       );
     }
     await client.query('COMMIT');

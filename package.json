@@ -12,9 +12,11 @@
     "test:pwa": "node tests/pwa-ui.mjs",
     "test:presentation": "node tests/presentation-ui.mjs",
     "test:live-storefront": "node tests/live-storefront-ui.mjs",
+    "test:paychangu-ui": "node tests/paychangu-ui.mjs",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
+    "db:migrate": "node --env-file=.env server/migrate.mjs",
     "seed:limits": "node --env-file=.env server/seed-excel-limits.mjs",
     "db:check": "node --env-file=.env server/check-neon.mjs",
     "test:neon": "node --env-file=.env tests/live-neon-readonly.mjs"

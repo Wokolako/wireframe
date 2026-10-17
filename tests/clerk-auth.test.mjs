@@ -7,7 +7,7 @@ process.env.CLERK_PUBLISHABLE_KEY='pk_test_'+Buffer.from('wirefen-test.clerk.acc
 process.env.CLERK_SECRET_KEY='sk_test_isolated_fixture';
 process.env.CLERK_JWT_KEY=publicKey.export({type:'spki',format:'pem'});
 process.env.CLERK_TELEMETRY_DISABLED='1';
-const {app}=await import('../server/index.mjs');const {db}=await import('../server/db.mjs');
+const {app,db}=await import('./helpers/test-api.mjs').then(module=>module.loadTestApi());
 const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 after(async()=>{await new Promise(r=>server.close(r));await db.close();});

@@ -1,5 +1,7 @@
 import {normalizeGeography} from '../shared/geography.mjs';
 import {guestLimitFor} from '../shared/guest-limits.mjs';
+import {legacyProduce} from '../shared/catalogue.mjs';
+import {minorUnits,majorUnits} from './money.mjs';
 import { randomUUID, scryptSync, randomBytes } from 'node:crypto';
 export const hashPassword = password => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 export async function seed(db) {
@@ -24,5 +26,5 @@ export async function seed(db) {
  ['Green cabbage','Vegetables',3600,6.8,'farm-3','cabbage',0,14,'Crisp green cabbages with tightly packed leaves. Supplied whole in bulk crates.','WF-ZA-KZN-2026-CAB05',4.5],
  ['Red kidney beans','Legumes',6000,24,'farm-2','beans',-5,180,'Dried red kidney beans, sorted for consistent quality. Suitable for wholesalers and processors.','WF-ZA-WC-2026-BN06',4.8]
  ];
- for(let i=0;i<products.length;i++){ const [title,cat,vol,price,farm,img,harvest,life,desc,trace,score]=products[i]; await db.run('INSERT INTO listings (id,farmer_id,title,crop_category,available_volume,sale_unit,price,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,agent_score,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[`produce-${i+1}`,farm,title,cat,vol,guestLimitFor(title)?.unit||'kg',price,date(harvest),date(harvest+life),life,0,desc,`/images/${img}.jpg`,trace,score,now]); }
+ for(let i=0;i<products.length;i++){ const [title,cat,vol,price,farm,img,harvest,life,desc,trace,score]=products[i];const produce=legacyProduce(title);const cents=minorUnits(price);if(!produce)throw new Error(`Seed listing "${title}" has no catalogue identity.`);await db.run('INSERT INTO listings (id,farmer_id,produce_id,title,crop_category,available_volume,sale_unit,price,price_minor,currency,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,agent_score,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[`produce-${i+1}`,farm,produce.id,title,cat,vol,produce.unit,majorUnits(cents),cents,process.env.CURRENCY||'ZAR',date(harvest),date(harvest+life),life,0,desc,`/images/${img}.jpg`,trace,score,now]); }
 }
