@@ -1,5 +1,7 @@
 node_modules
 dist
+.next
+.vercel
 data
 test-results
 .git

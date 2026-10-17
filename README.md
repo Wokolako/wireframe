@@ -2,18 +2,18 @@
 
 Wirefen agricultural marketplace and lifecycle platform.
 
-Phase 1 agricultural marketplace: React/TypeScript client, Express REST API, and Neon PostgreSQL in live mode. SQLite remains available for isolated tests and presentation development.
+Phase 1 agricultural marketplace: a Next.js App Router frontend, Express REST API mounted through Next.js API routes, and Neon PostgreSQL in live mode. SQLite remains available for isolated tests and presentation development.
 
 ## Live backend with Neon
 
-The local `.env` enables `VITE_USE_BACKEND=true` and `SEED_DEMO=false`. Set a Neon pooled `DATABASE_URL` and matching Clerk keys, then run:
+Set `NEXT_PUBLIC_USE_BACKEND=true`, `USE_BACKEND=true`, and `SEED_DEMO=false` in `.env`. Set a Neon pooled `DATABASE_URL` and matching Clerk keys, then run:
 
 ```powershell
 npm.cmd install
-npm.cmd run dev:full
+npm.cmd run dev
 ```
 
-For a built app served by Express, use `npm.cmd run build` followed by `npm.cmd run start:api`. Live mode refuses to start without `DATABASE_URL`; it does not silently use SQLite. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the API to refresh its in-memory limit lookup.
+Open http://127.0.0.1:3000. The Next.js Node server handles both pages and `/api/v1/*`; live mode refuses to start without `DATABASE_URL` and does not silently use SQLite. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the app to refresh its in-memory limit lookup.
 
 Guest household checkout places an order without an account using pay on delivery. Staff confirm stock and delivery, then record collected payment in the admin queue. No external payment provider is required for this method.
 
@@ -21,31 +21,33 @@ Available stock and supplier locations are restricted to admin reports. The orig
 
 ## Optional presentation mode
 
-Set `VITE_USE_BACKEND=false` before starting or building the frontend. This mode is a separate local demonstration and does not use Neon.
+Set both `NEXT_PUBLIC_USE_BACKEND=false` and `USE_BACKEND=false` before starting or building the app. This mode is a separate local demonstration and does not use Neon. Because `NEXT_PUBLIC_*` variables are embedded in client bundles at build time, set this before `npm.cmd run build`; `USE_BACKEND` controls API availability at runtime.
 
-Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and EUR/USD example rates remain browser-local dummy data. The frontend does not call the Wirefen Node API, SMS gateway or currency provider. The Node backend remains in `server/` for later activation.
+Authentication is real: Clerk handles sign-in, registration, email verification and sessions directly from the frontend. Marketplace items, requests, farmer profiles and EUR/USD example rates remain browser-local dummy data. In this mode, Next.js returns 404 for API routes; no database, SMS gateway or currency provider is used.
 
 ```powershell
 npm.cmd install
 npm.cmd run dev
 ```
 
-Open http://127.0.0.1:5173. For the installable presentation build:
+Open http://127.0.0.1:3000. For the installable presentation build:
 
 ```powershell
 npm.cmd run build
 npm.cmd start
 ```
 
-Open http://127.0.0.1:3001. This starts a static Vite preview, without the API. You can also deploy `dist/` to a static host. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
+This runs the native Next.js server on port 3000 (or `PORT` if configured); deploy it as a Node.js application or with the included Dockerfile. Use **Sign in** or **Create account** for your real Clerk account. New buyers and farmers complete a local Wirefen profile. The verified Clerk email **georgechivalo01@gmail.com** opens the Admin workspace automatically. Arbitrary sample-account switching has been removed. Requests, consent preferences, farmer drafts and new listings persist only in browser storage; no real order is sent. Remove the `wirefen-presentation-v1` local-storage entry to reset the sample dataset; clear `wirefen-baseline-*` / `wirefen-listing-*` entries if you also want to reset wizard drafts.
 
 ## Backend configuration
 
-Set `VITE_USE_BACKEND=true` in `.env` and restart/rebuild the frontend. Use `npm.cmd run dev:full` for both development servers, or `npm.cmd run build` followed by `npm.cmd run start:api` for the Node-served build. Clerk keys and the database are read by the backend only in that connected workflow. Admin access requires a server-side role or permission; the presentation-mode email shortcut does not grant live API access.
+Set `NEXT_PUBLIC_USE_BACKEND=true` and `USE_BACKEND=true` before starting or building the app, and configure the server-side Clerk keys and database. Use `npm.cmd run dev` for development, or `npm.cmd run build` followed by `npm.cmd start` for production. The Next.js Node server handles both the app and API in one process. Admin access requires a server-side role or permission; the presentation-mode email shortcut does not grant live API access.
 
 The launch market is still a configurable sample (South Africa/ZAR). Do not treat presentation exchange rates or records as live data.
 
 ## Features
+
+The Admin workspace includes a searchable **Produce price references** table with 44 rows transcribed from the supplied `malawi_produce_top40_prices.csv` screenshots. The reusable source is `shared/produce-prices.json`; full names match the existing household-limit catalogue. GBP values retain their original units and ranges. `mwk_visible_from` records only the visible start of each Malawi price; the clipped range endings and market notes remain unknown. Three clipped GBP range endings are also `null`. The source price date is unknown. These references do not change listing prices, create stock, or convert currencies, and work in both live and presentation builds without a database import.
 
 - Public catalogue with search, category, minimum/maximum volume, harvest-date and preservative filters; sorting, grid/list views, local saved produce, and listing detail routes.
 - Buyer order inquiries persist to a staff queue. Admins progress New → In review → Contacted → Closed. No checkout or payment is implied.
@@ -58,13 +60,16 @@ The launch market is still a configurable sample (South Africa/ZAR). Do not trea
 
 ## Configuration and production
 
-The ignored local `.env` contains your supplied Clerk development keys. Never commit it. For another environment, copy `.env.example` and provide that environment?s credentials. The secret stays on the API server; `/api/v1/config` exposes only the publishable key. In backend mode the React/Vite app loads the public key at runtime. Static presentation mode uses VITE_CLERK_PUBLISHABLE_KEY or the public development fallback in src/auth-config.ts.
+The ignored local `.env` contains your supplied Clerk development keys. Never commit it. For another environment, copy `.env.example` and provide that environment?s credentials. The secret stays on the server; `/api/v1/config` exposes only the publishable key. `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is the client-side override; otherwise `src/auth-config.ts` uses the public development fallback.
 
 | Variable | Purpose |
 | --- | --- |
-| `PORT` | API/static server port; default 3001 |
+| `PORT` | Next.js server port; default 3000 |
+| `NEXT_PUBLIC_USE_BACKEND` | Client mode: set to `true` for live API/database mode; set before build |
+| `USE_BACKEND` | Server-side API switch; set to `true` to enable live API routes |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Optional public Clerk key override, embedded in the client bundle |
 | `APP_ORIGIN` | Comma-separated exact allowed browser origins; required for Clerk in production |
-| `CLERK_PUBLISHABLE_KEY` | Public Clerk instance key; VITE_/NEXT_PUBLIC_ aliases are also accepted by the API |
+| `CLERK_PUBLISHABLE_KEY` | Public Clerk instance key; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is also accepted |
 | `CLERK_SECRET_KEY` | Server-only Clerk API credential; configure together with the public key |
 | `DATABASE_URL` | PostgreSQL connection URL; absent uses `data/wirefen.sqlite` locally |
 | `NODE_ENV` | Set `production` to disable demo access and enable Secure cookies |
@@ -170,12 +175,12 @@ An installed state is monotonic: future dismissals cannot erase it. Signing in m
 
 ## Node backend and deployment
 
-The Node 22 / Express 5 API serves the entire Phase 1 app: Clerk/local authentication, profile onboarding, role and farm ownership checks, baseline/listing draft persistence, searchable catalogue, produce creation, buyer inquiries, admin order progression, consent records, signed SMS webhook, currency rates, and persistent install sessions. PostgreSQL and SQLite use the same relational schema. `GET /api/v1/health` checks database connectivity. SIGTERM/SIGINT stop accepting new connections and close the database.
+The Next.js Node server delivers the app and mounts the Express 5 API at `/api/*`: Clerk/local authentication, profile onboarding, role and farm ownership checks, baseline/listing draft persistence, searchable catalogue, produce creation, buyer inquiries, admin order progression, consent records, signed SMS webhook, currency rates, and persistent install sessions. PostgreSQL and SQLite use the same relational schema. `GET /api/v1/health` checks database connectivity. The API's database initializes on first request and remains in the Next.js process.
 
-A Dockerfile and PostgreSQL Compose service are included. Set production Clerk keys, an exact HTTPS `APP_ORIGIN`, and a long URL-safe `POSTGRES_PASSWORD`, then use `docker compose up --build -d`. Terminate HTTPS at your reverse proxy; the app port is bound to host loopback. `TRUST_PROXY_HOPS=1` assumes exactly one trusted proxy; adjust to your real deployment. Runtime credentials are injected into the container and excluded from the image build. Configure Twilio credentials before sending SMS. Back up the PostgreSQL volume and use a shared/edge rate limiter for multiple API instances. Container/PostgreSQL deployment configuration is provided but was not executed on this workstation.
+A Dockerfile and PostgreSQL Compose service are included. Set `NEXT_PUBLIC_USE_BACKEND=true` at build time and `USE_BACKEND=true` at runtime, production Clerk keys, an exact HTTPS `APP_ORIGIN`, and a long URL-safe `POSTGRES_PASSWORD`, then use `docker compose up --build -d`. The standalone Next.js Node server serves both pages and APIs. Terminate HTTPS at your reverse proxy; the app port is bound to host loopback. `TRUST_PROXY_HOPS=1` assumes exactly one trusted proxy; adjust to your real deployment. Runtime credentials are injected into the container and excluded from the image build. Configure Twilio credentials before sending SMS. Back up the PostgreSQL volume and use a shared/edge rate limiter for multiple API instances. Container/PostgreSQL deployment configuration is provided but was not executed on this workstation.
 
-GitHub Actions runs dependency installation, all backend tests, and the production build. Run `node tests/pwa-ui.mjs` for first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation checks. Run `npm.cmd run test:ui` for the full marketplace flow.
+GitHub Actions runs dependency installation, all backend tests, and the production build. Browser checks start a Next.js development server with an isolated SQLite database; `node tests/pwa-ui.mjs` checks first-visit, persistence, installed-state, cross-device account, standalone, and responsive invitation behavior. Run `npm.cmd run test:ui` for Next.js routing, API health, catalogue filtering, and mobile-layout checks.
 
-Presentation validation: `npm.cmd run test:presentation` launches a static-only server, blocks Wirefen `/api/` requests, and checks the dummy catalogue/converter, live Clerk dialogs and phone layout. `node --env-file=.env tests/clerk-registration-ui.mjs` creates a temporary Clerk development test account through the real registration form, verifies email, completes onboarding, signs out/in, and deletes that test account. No real emails are sent. Unit tests check the verified-email admin rule and local profile isolation. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require a frontend built with `VITE_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
+Presentation validation: `npm.cmd run test:presentation` launches the Next.js app in presentation mode, checks that API routes are unavailable, and checks the dummy catalogue/converter, live Clerk dialogs and phone layout. `node --env-file=.env tests/clerk-registration-ui.mjs` creates a temporary Clerk development test account through the real registration form, verifies email, completes onboarding, signs out/in, and deletes that test account. No real emails are sent. Unit tests check the verified-email admin rule and local profile isolation. Backend integration browser tests (`test:ui`, `test:pwa`, Clerk smoke tests) require `NEXT_PUBLIC_USE_BACKEND=true`; `npm.cmd test` tests backend modules independently.
 
-Clerk configuration: `src/auth-config.ts` contains only the public development instance identifier as a fallback for static deployments; `VITE_CLERK_PUBLISHABLE_KEY` overrides it. The secret is never bundled. Development-instance restrictions still apply; use production Clerk keys and configured domains when going live. Marketplace demo data remains separate from Clerk accounts.
+Clerk configuration: `src/auth-config.ts` contains only the public development instance identifier as a fallback; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` overrides it. The secret is never bundled. Development-instance restrictions still apply; use production Clerk keys and configured domains when going live. Marketplace demo data remains separate from Clerk accounts.

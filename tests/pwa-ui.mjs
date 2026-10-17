@@ -1,9 +1,9 @@
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
 import {mkdir} from 'node:fs/promises';
+import {startNextDev} from './next-dev-server.mjs';
 const base='http://127.0.0.1:3013';
-const server=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,PORT:'3013',SQLITE_PATH:':memory:',NODE_ENV:'development',SEED_DEMO:'true'},stdio:'pipe'});
+const server=await startNextDev({port:3013});
 await mkdir('test-results',{recursive:true});let browser;
 try{
  let ready=false;for(let i=0;i<60;i++){try{if((await fetch(base+'/api/v1/health')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,'Test API started');
@@ -19,4 +19,4 @@ try{
  const other=await browser.newContext();await other.request.post(base+'/api/v1/auth/demo',{data:{role:'Farmer'}});const otherPage=await other.newPage();await otherPage.goto(base);await otherPage.waitForTimeout(4500);assert.equal(await otherPage.locator('.install-invitation').count(),0);assert.equal(await otherPage.evaluate(()=>JSON.parse(localStorage.getItem('wirefen-install-v1')).suppressed),true);
  const standalone=await browser.newContext();await standalone.addInitScript(()=>{Object.defineProperty(navigator,'standalone',{get:()=>true});});const app=await standalone.newPage();await app.goto(base);await app.waitForTimeout(4200);assert.equal(await app.locator('.install-invitation').count(),0);assert.ok(await app.evaluate(()=>JSON.parse(localStorage.getItem('wirefen-install-v1')).installedAt));
  assert.deepEqual(errors,[]);console.log('PASS: first-visit invitations, desktop/mobile layout, dismissal/reload persistence, server-cookie fallback, confirmed installation, account cross-device suppression and standalone launch.');
-}finally{await browser?.close();server.kill();}
+}finally{await browser?.close();server.child.kill();}

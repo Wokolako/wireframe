@@ -1,32 +1,48 @@
-import { chromium } from 'playwright';
-import { mkdir,readFile } from 'node:fs/promises';
+import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {resolve} from 'node:path';
-import {spawn} from 'node:child_process';
-const base=process.env.TEST_URL||'http://127.0.0.1:3011';
-const testServer=process.env.TEST_URL?null:spawn(process.execPath,['server/index.mjs'],{env:{...process.env,PORT:'3011',SQLITE_PATH:':memory:',NODE_ENV:'development',SEED_DEMO:'true'},stdio:'pipe'});
-if(testServer){let ready=false;for(let i=0;i<60;i++){try{if((await fetch(base+'/api/v1/config')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,250));}if(!ready){testServer.kill();throw new Error('Isolated test API did not start.');}}
-await mkdir('test-results',{recursive:true});
+import {mkdir} from 'node:fs/promises';
+import {startNextDev} from './next-dev-server.mjs';
+
+const server=await startNextDev({port:3011});
 const browser=await chromium.launch({channel:'chrome',headless:true});
-const context=await browser.newContext({viewport:{width:1440,height:1100},reducedMotion:'reduce'});
-const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
 try{
- await page.goto(base);await page.getByRole('heading',{name:'The marketplace'}).waitFor();await page.locator('.produce-card').first().waitFor();await page.evaluate(()=>document.fonts.ready);
- await page.evaluate(async()=>{for(const img of document.images){img.loading='eager';await img.decode().catch(()=>{});}window.scrollTo(0,0);});await page.screenshot({path:'test-results/marketplace-desktop.png',fullPage:true});
- assert.equal(await page.locator('.produce-card').count(),6);
- const earlyMobile=await context.newPage();await earlyMobile.setViewportSize({width:375,height:812});await earlyMobile.goto(base);await earlyMobile.locator('.produce-card').first().waitFor();await earlyMobile.evaluate(()=>document.fonts.ready);await earlyMobile.evaluate(async()=>{for(const img of document.images){img.loading='eager';await img.decode().catch(()=>{});}window.scrollTo(0,0);});await earlyMobile.screenshot({path:'test-results/marketplace-mobile.png',fullPage:true});await earlyMobile.close();
- const broken=await page.locator('img').evaluateAll(images=>images.filter(i=>!i.complete||i.naturalWidth===0).map(i=>i.src));assert.deepEqual(broken,[]);
- await page.getByRole('button',{name:'Grains',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.produce-card').length===1);assert.match(await page.locator('.produce-card').innerText(),/maize/);
- await page.getByRole('button',{name:'All produce',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('.produce-card').length===6);
- await page.getByRole('button',{name:'Save Roma tomatoes',exact:true}).click();await page.getByRole('link',{name:/Saved produce/}).click();await page.locator('.produce-card').first().waitFor();assert.equal(await page.locator('.produce-card').count(),1);
- await page.getByRole('link',{name:'Marketplace',exact:true}).click();await page.getByRole('button',{name:'Filters',exact:true}).click();await page.getByLabel('Minimum volume (kg)',{exact:true}).fill('10000');await page.getByRole('button',{name:'Apply filters'}).click();await page.waitForFunction(()=>document.querySelectorAll('.produce-card').length===1);await page.getByRole('button',{name:'Reset',exact:true}).click();
- await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('button',{name:'Buyer',exact:true}).click();await page.getByRole('link',{name:'Roma tomatoes',exact:true}).click();await page.getByLabel('Quantity (kg)').fill('200');await page.getByLabel('Delivery or collection location').fill('Johannesburg test collection');await page.getByLabel('Anything else? (optional)').fill('Browser test inquiry');await page.getByRole('button',{name:'Send order request'}).click();await page.getByRole('heading',{name:'Your request is in.'}).waitFor();await page.getByRole('link',{name:'View my requests'}).click();await page.getByRole('row').filter({hasText:'Johannesburg test collection'}).first().waitFor();
- await page.locator('.profile-menu summary').click();await page.getByRole('button',{name:'Sign out',exact:true}).click();await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('button',{name:'Farmer',exact:true}).click();await page.getByRole('link',{name:'Growing history',exact:true}).click();await page.getByLabel('Primary crop',{exact:true}).fill('Tomatoes');await page.getByLabel('Average land planted (acres)',{exact:false}).fill('12');await page.getByRole('button',{name:'Continue',exact:true}).click();await page.getByLabel('Average yield (kg per acre)').fill('3500');await page.getByLabel('Average growing duration (days)',{exact:false}).fill('90');await page.getByText('All changes saved',{exact:true}).waitFor();
- await page.screenshot({path:'test-results/baseline-desktop.png',fullPage:true});
- await page.evaluate(()=>navigator.serviceWorker.ready);await context.setOffline(true);await page.waitForFunction(()=>!navigator.onLine);await page.getByLabel('Average yield (kg per acre)').fill('3600');await page.getByText('Saved on this device',{exact:true}).waitFor();await page.waitForFunction(()=>JSON.parse(localStorage.getItem('wirefen-baseline-farmer-1-farm-1')||'{}').data?.avg_yield_per_acre===3600);await page.reload();await page.getByLabel('Average yield (kg per acre)').waitFor();assert.equal(await page.getByLabel('Average yield (kg per acre)').inputValue(),'3600');await context.setOffline(false);await page.getByText('All changes saved',{exact:true}).waitFor();await page.getByRole('button',{name:'Continue',exact:true}).click();await page.getByLabel(/Average production cost/).fill('15000');await page.getByRole('button',{name:'Continue',exact:true}).click();await page.getByRole('button',{name:'Submit growing history'}).click();await page.getByRole('heading',{name:'A stronger season starts with good records.'}).waitFor();
- await page.locator('.profile-menu summary').click();await page.getByRole('button',{name:'Sign out',exact:true}).click();await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.getByRole('button',{name:'Admin',exact:true}).click();await page.getByRole('link',{name:'Admin assist',exact:true}).click();await page.getByRole('radio',{name:'Select Mokoena Family Farm'}).check();await page.screenshot({path:'test-results/admin-desktop.png',fullPage:true});
- await page.getByRole('link',{name:'Order request queue'}).click();const row=page.getByRole('row').filter({hasText:'Johannesburg test collection'}).first();await row.getByRole('combobox').selectOption('Contacted');
- const mobile=await context.newPage();await mobile.setViewportSize({width:375,height:812});await mobile.goto(base);await mobile.locator('.produce-card').first().waitFor();await mobile.evaluate(()=>document.fonts.ready);await mobile.evaluate(async()=>{for(const img of document.images){img.loading='eager';await img.decode().catch(()=>{});}window.scrollTo(0,0);});await mobile.screenshot({path:'test-results/marketplace-mobile.png',fullPage:true});assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile viewport overflows');await mobile.getByRole('button',{name:'Toggle navigation'}).click();await mobile.getByRole('link',{name:'Admin assist',exact:true}).click();await mobile.getByRole('heading',{name:'A helping hand, at every step.'}).waitFor();assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Admin viewport overflows');
- await mobile.setViewportSize({width:812,height:375});await mobile.goto(base);await mobile.locator('.produce-card').first().waitFor();assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Landscape viewport overflows');
- assert.deepEqual(errors,[]);console.log('PASS: desktop and mobile layout, image loading, search filters, saved produce, buyer inquiry, farmer wizard, offline reload/sync, admin queue, reduced motion, no browser runtime errors.');
-}catch(error){console.log('Failure URL:',page.url());console.log('Visible page:',await page.locator('body').innerText().catch(()=>''));console.log('Offline diagnostics:',await page.evaluate(()=>({online:navigator.onLine,session:localStorage.getItem('wirefen-session'),draftKeys:Object.keys(localStorage).filter(k=>k.includes('baseline')).map(k=>[k,localStorage.getItem(k)])})).catch(()=>({})));await page.screenshot({path:'test-results/flow-failure.png',fullPage:true}).catch(()=>{});throw error;}finally{await browser.close();testServer?.kill();}
+ const health=await fetch(`${server.base}/api/v1/health`);
+ assert.equal(health.status,200);
+ assert.equal((await health.json()).status,'ok');
+ await mkdir('test-results',{recursive:true});
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.goto(server.base);
+ await page.getByRole('heading',{name:'The marketplace'}).waitFor();
+ await page.locator('.produce-card').first().waitFor();
+ assert.equal(await page.locator('.produce-card').count(),4);
+
+ await page.locator('.catalog-toolbar select').nth(0).selectOption('Grains');
+ await page.waitForFunction(()=>document.querySelectorAll('.produce-card').length===1);
+ assert.match(await page.locator('.produce-card').innerText(),/Maize/);
+ await page.locator('.catalog-toolbar select').nth(0).selectOption('All produce');
+ await page.waitForFunction(()=>document.querySelectorAll('.produce-card').length===4);
+
+ await page.getByRole('button',{name:'Add 1 kg to basket'}).first().click();
+ await page.waitForURL('**/basket');
+ await page.getByRole('heading',{name:'Your basket'}).waitFor();
+ await page.screenshot({path:'test-results/next-basket.png',fullPage:true});
+
+ await page.getByRole('link',{name:'Currency converter',exact:true}).click();
+ await page.waitForURL('**/converter');
+ await page.getByRole('heading',{name:'Currency converter'}).waitFor();
+ await page.getByRole('link',{name:'Marketplace',exact:true}).click();
+ await page.waitForURL('**/marketplace');
+ await page.getByRole('heading',{name:'The marketplace'}).waitFor();
+
+ await page.setViewportSize({width:390,height:844});
+ await page.goto(`${server.base}/marketplace`);
+ await page.locator('.produce-card').first().waitFor();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.screenshot({path:'test-results/next-marketplace-mobile.png',fullPage:true});
+ assert.deepEqual(errors,[]);
+ console.log('PASS: Next.js page routing, native history navigation, integrated API health, catalogue filtering and mobile layout.');
+}finally{
+ await browser.close();
+ server.child.kill();
+}

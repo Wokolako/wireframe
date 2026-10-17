@@ -13,13 +13,18 @@ services:
       timeout: 5s
       retries: 12
   app:
-    build: .
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_USE_BACKEND: ${NEXT_PUBLIC_USE_BACKEND:-true}
     ports:
       - "127.0.0.1:3001:3001"
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3001
+      NEXT_PUBLIC_USE_BACKEND: ${NEXT_PUBLIC_USE_BACKEND:-true}
+      USE_BACKEND: ${NEXT_PUBLIC_USE_BACKEND:-true}
       DATABASE_URL: postgresql://wirefen:${POSTGRES_PASSWORD}@db:5432/wirefen
       APP_ORIGIN: ${APP_ORIGIN:?Set your HTTPS application origin}
       CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY:?Set your Clerk publishable key}

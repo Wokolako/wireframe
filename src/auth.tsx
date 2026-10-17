@@ -1,3 +1,4 @@
+import {useRouter} from 'next/navigation';
 import {CountrySelect} from './Compliance';
 import {useEffect,useState,type FormEvent} from 'react';
 import {ClerkProvider,useAuth,useClerk,useUser} from '@clerk/react';
@@ -14,19 +15,13 @@ function ClerkApp(){
  setTokenGetter(()=>getToken());
  return <App identity={{ready:isLoaded&&userLoaded,signedIn:!!isSignedIn,sessionId:sessionId?sessionId+':'+(user?.updatedAt?.getTime()||0):sessionId,name:user?.fullName||'',signIn:()=>clerk.openSignIn(),signUp:()=>clerk.openSignUp(),signOut:async()=>{await clerk.signOut();},manage:()=>clerk.openUserProfile()}}/>;
 }
-function navigateAuth(to:string,replace=false){
- const url=new URL(to,location.href);
- if(url.origin!==location.origin||url.pathname!==location.pathname){if(replace)location.replace(url.href);else location.assign(url.href);return;}
- // Keep Clerk's completed session mounted when navigating this hash-based SPA.
- if(replace)history.replaceState(null,'',url);else history.pushState(null,'',url);
- window.dispatchEvent(new HashChangeEvent('hashchange'));
-}
 export function AuthRoot(){
+ const router=useRouter();
  const [config,setConfig]=useState<Config|null>(null),[error,setError]=useState('');
  useEffect(()=>{api<Config>('/config').then(c=>{writeLocal('wirefen-config',c);setConfig(c);}).catch(()=>{const saved=readLocal<Config|null>('wirefen-config',null);if(saved&&!navigator.onLine)setConfig(saved);else setError('We could not connect to Wirefen. Check your connection and try again.');});},[]);
  if(error)return <div className="startup-state"><Sprout size={36}/><h1>Let’s reconnect.</h1><p role="alert">{error}</p><button className="primary" onClick={()=>location.reload()}>Try again</button></div>;
  if(!config)return <div className="startup-state" role="status"><Sprout size={36}/><p>Opening your growing network…</p></div>;
- if(config.auth_provider==='clerk'&&config.clerk_publishable_key&&navigator.onLine)return <ClerkProvider publishableKey={config.clerk_publishable_key} routerPush={url=>navigateAuth(url)} routerReplace={url=>navigateAuth(url,true)} signInFallbackRedirectUrl="/#/marketplace" signUpFallbackRedirectUrl="/#/marketplace" localization={{signIn:{start:{title:'Sign in to Wirefen'}},signUp:{start:{title:'Create your Wirefen account'}}}} appearance={{variables:{colorPrimary:'#234c36',colorForeground:'#203a2b',fontFamily:'DM Sans, sans-serif',borderRadius:'0.8rem'},elements:{cardBox:{boxShadow:'0 24px 80px #173c2826'},formButtonPrimary:{minHeight:'44px'}}}}><ClerkApp/></ClerkProvider>;
+ if(config.auth_provider==='clerk'&&config.clerk_publishable_key&&navigator.onLine)return <ClerkProvider publishableKey={config.clerk_publishable_key} routerPush={url=>router.push(url)} routerReplace={url=>router.replace(url)} signInFallbackRedirectUrl="/marketplace" signUpFallbackRedirectUrl="/marketplace" localization={{signIn:{start:{title:'Sign in to Wirefen'}},signUp:{start:{title:'Create your Wirefen account'}}}} appearance={{variables:{colorPrimary:'#234c36',colorForeground:'#203a2b',fontFamily:'DM Sans, sans-serif',borderRadius:'0.8rem'},elements:{cardBox:{boxShadow:'0 24px 80px #173c2826'},formButtonPrimary:{minHeight:'44px'}}}}><ClerkApp/></ClerkProvider>;
  return <App offlineClerk={config.auth_provider==='clerk'}/>;
 }
 export function Onboarding({name,onComplete}:{name:string;onComplete:(user:User)=>void}){

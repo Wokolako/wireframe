@@ -13,7 +13,6 @@ import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { randomUUID, randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
 import { resolve } from 'node:path';
-import { existsSync } from 'node:fs';
 import twilio from 'twilio';
 import { db, initDb } from './db.mjs';
 import { seed, hashPassword } from './seed.mjs';
@@ -22,12 +21,12 @@ import { getExchangeRates } from './exchange.mjs';
 await initDb();
 await loadLimitsFromDb(db);
 const production = process.env.NODE_ENV === 'production';
-const clerkKey=process.env.CLERK_PUBLISHABLE_KEY||process.env.VITE_CLERK_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+const clerkKey=process.env.CLERK_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const clerkEnabled=!!(clerkKey&&process.env.CLERK_SECRET_KEY);
 if(!!clerkKey!==!!process.env.CLERK_SECRET_KEY)throw new Error('Configure both Clerk publishable and secret keys.');
 const clerkHost=clerkEnabled?'https://'+Buffer.from(clerkKey.split('_').slice(2).join('_'),'base64').toString().replace(/\$$/,''):null;
 const authorizedParties=process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filter(Boolean)||[];
-if(!production)authorizedParties.push('http://localhost:5173','http://127.0.0.1:5173','http://localhost:3001','http://127.0.0.1:3001');
+if(!production)authorizedParties.push('http://localhost:3000','http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001');
 if(clerkEnabled&&production&&!authorizedParties.length)throw new Error('APP_ORIGIN is required with Clerk in production.');
 const demo = !production && process.env.SEED_DEMO !== 'false';
 if(demo) await seed(db);
@@ -416,9 +415,8 @@ app.post('/api/v1/webhooks/sms/receive',smsLimit,async(req,res)=>{
  await db.run('INSERT INTO sms_messages VALUES (?,?)',[MessageSid,now()]);xml(message);
 });
 app.use('/api',(req,res)=>res.status(404).json({error:'API endpoint not found.'}));
-if(existsSync(resolve('dist/index.html'))){app.use(express.static(resolve('dist')));app.get('/{*path}',(req,res)=>res.sendFile(resolve('dist/index.html')));}
 app.use((err,req,res,next)=>{if(err instanceof z.ZodError)return res.status(400).json({error:err.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join('; '),fields:err.issues});if(err.code==='23505'||err.code==='ERR_SQLITE_ERROR'&&String(err.message).includes('UNIQUE'))return res.status(409).json({error:'This record already exists.'});if(!err.status)console.error(err);res.status(err.status||500).json({error:err.status?err.message:'Something went wrong. Please try again.'});});
-if(process.env.NODE_ENV!=='test'){
+if(process.env.NODE_ENV!=='test' && process.argv[1] && resolve(process.argv[1])===resolve('server/index.mjs')){
  const host=process.env.HOST||'127.0.0.1',port=Number(process.env.PORT||3001);
  const server=app.listen(port,host,()=>console.log(`Wirefen API: http://${host}:${port}`));
  let stopping=false;

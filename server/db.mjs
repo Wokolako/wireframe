@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import {Pool,neonConfig} from '@neondatabase/serverless';
 let pool, sqlite;
 let transactionQueue=Promise.resolve();
-if (!process.env.DATABASE_URL && (process.env.VITE_USE_BACKEND==='true' || process.env.NODE_ENV==='production')) {
+const backendEnabled=process.env.USE_BACKEND??process.env.NEXT_PUBLIC_USE_BACKEND;
+if (!process.env.DATABASE_URL && (process.env.NODE_ENV==='production' || backendEnabled==='true' && process.env.SQLITE_PATH!==':memory:')) {
   throw new Error('DATABASE_URL is required for the live Wirefen backend. Configure Neon before starting the API.');
 }
 if (process.env.DATABASE_URL) {

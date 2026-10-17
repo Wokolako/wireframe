@@ -1,5 +1,5 @@
 import {demoApi} from './demo';
-export const PRESENTATION_MODE=import.meta.env.VITE_USE_BACKEND!=='true';
+export const PRESENTATION_MODE=process.env.NEXT_PUBLIC_USE_BACKEND!=='true';
 export type Farmer={id:string;user_id:string;farm_name:string;country?:string;country_code?:string;location_key?:string;region?:string;district?:string;locality?:string;ward?:string;location:string;farm_size:number;verification_status:string;name?:string;phone?:string;baseline_status?:string};
 export type UserRole='Buyer'|'Farmer'|'Admin'|'Agent';
 export type User={id:string;name:string;phone:string;email?:string;role:UserRole;sms_opt_in:boolean;farmer:Farmer|null};

@@ -1,12 +1,9 @@
-import {spawn} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {startNextDev} from './next-dev-server.mjs';
 
 const base='http://127.0.0.1:3012';
-const child=spawn(process.execPath,['server/index.mjs'],{
-  env:{...process.env,DATABASE_URL:'',VITE_USE_BACKEND:'false',CLERK_SECRET_KEY:'',CLERK_PUBLISHABLE_KEY:'',VITE_CLERK_PUBLISHABLE_KEY:'',PORT:'3012',SQLITE_PATH:':memory:',NODE_ENV:'development',SEED_DEMO:'true'},
-  stdio:'pipe'
-});
+const {child}=await startNextDev({port:3012});
 let browser;
 try {
   let ready=false;

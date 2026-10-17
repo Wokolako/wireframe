@@ -4,7 +4,7 @@ import {normalizeGeography} from '../shared/geography.mjs';
 import {parseCost,costFields} from '../shared/finance.mjs';
 process.env.NODE_ENV='test';process.env.SQLITE_PATH=':memory:';process.env.SEED_DEMO='true';
 delete process.env.DATABASE_URL;
-for(const name of ['CLERK_SECRET_KEY','CLERK_PUBLISHABLE_KEY','VITE_CLERK_PUBLISHABLE_KEY','NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY'])delete process.env[name];
+for(const name of ['CLERK_SECRET_KEY','CLERK_PUBLISHABLE_KEY','NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY','NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY'])delete process.env[name];
 process.env.TWILIO_AUTH_TOKEN='appendix-test';process.env.TWILIO_WEBHOOK_URL='https://wirefen.test/api/v1/webhooks/sms/receive';
 const {app}=await import('../server/index.mjs'),{db,initDb}=await import('../server/db.mjs');
 const {createClerkProfile}=await import('../server/clerk-profile.mjs');

@@ -1,5 +1,6 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {api,send,readLocal,writeLocal} from './api';
+import {navigate} from './navigation';
 import {ArrowDownToLine,Check,Download,Share,Smartphone,Sprout,WifiOff,X} from 'lucide-react';
 type InstallPrompt=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 type InstallMemory={promptedAt?:string;dismissedAt?:string;installedAt?:string;source?:InstallSource;suppressed?:boolean};
@@ -51,15 +52,15 @@ export function useInstall({ready=true,userId,online=navigator.onLine}:{ready?:b
   let seen=false;try{seen=sessionStorage.getItem(storageKey)==='seen';}catch{}
   if(!checked||installed||suppress(memory())||seen)return;
   const timer=setInterval(()=>{
-   if(document.visibilityState!=='visible'||document.querySelector('dialog[open],.cl-modalBackdrop')||location.hash==='#/get-app')return;
+   if(document.visibilityState!=='visible'||document.querySelector('dialog[open],.cl-modalBackdrop')||location.pathname==='/get-app')return;
    if(suppress(memory())){clearInterval(timer);return;}
    setInvitation(true);remember('prompted');clearInterval(timer);
   },3500);
   return()=>clearInterval(timer);
  },[checked,installed,remember]);
  const dismiss=()=>remember('dismissed');
- async function install(){if(!prompt||busy)return;setBusy(true);setMessage('');setInvitation(false);try{await prompt.prompt();const choice=await prompt.userChoice;if(choice.outcome==='dismissed'){remember('dismissed');setMessage('No problem. You can install Wirefen whenever you?re ready.');}else{remember('prompted');setMessage('Installation accepted. Look for Wirefen on your home screen or in your apps.');}setPrompt(null);}catch{setMessage('Installation could not open. Use your browser menu to add Wirefen.');location.hash='/get-app';}finally{setBusy(false);}}
- const openInstall=()=>{setInvitation(false);if(prompt)void install();else location.hash='/get-app';};
+ async function install(){if(!prompt||busy)return;setBusy(true);setMessage('');setInvitation(false);try{await prompt.prompt();const choice=await prompt.userChoice;if(choice.outcome==='dismissed'){remember('dismissed');setMessage('No problem. You can install Wirefen whenever you?re ready.');}else{remember('prompted');setMessage('Installation accepted. Look for Wirefen on your home screen or in your apps.');}setPrompt(null);}catch{setMessage('Installation could not open. Use your browser menu to add Wirefen.');navigate('/get-app');}finally{setBusy(false);}}
+ const openInstall=()=>{setInvitation(false);if(prompt)void install();else navigate('/get-app');};
  return {available:!!prompt,installed,busy,message,install,invitation,dismiss,openInstall};
 }
 export function InstallInvitation({pwa}:{pwa:ReturnType<typeof useInstall>}){
