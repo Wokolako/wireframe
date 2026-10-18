@@ -202,9 +202,6 @@ function ReceiptModal({payment,close}:{payment:Payment;close:()=>void}){
  );
 }
 
-      <span>ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â²ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â²ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â²ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â²ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â² Airtel MW</span>
-     <div className="phone-screen-text">{loading?'ConnectingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦':screenText}</div>
-
 function Requests({user,notify,onlinePayments}:{user:User;notify:(s:string)=>void;onlinePayments:boolean}){
  const [orders,setOrders]=useState<Order[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);
  const [payingOrder,setPayingOrder]=useState<Order|null>(null);
