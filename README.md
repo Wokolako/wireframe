@@ -16,7 +16,7 @@ npm.cmd run dev
 
 Open http://127.0.0.1:3000. The Next.js Node server handles both pages and `/api/v1/*`; live mode refuses to start without `DATABASE_URL` and does not silently use SQLite. Startup checks the schema version but does not apply DDL; run `npm.cmd run db:migrate` with a migration-capable database identity before each application deployment. For legacy listing prices without a recorded currency, set `LEGACY_PRICE_CURRENCY` to their actual currency before migrating; migration intentionally refuses to guess. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the app to refresh its in-memory limit lookup.
 
-Guest household checkout places an order without an account. Pay on delivery remains available everywhere. For Malawi, configure `CURRENCY=MWK`, verified MWK listing prices, and server-side `PAYCHANGU_SECRET_KEY` plus `PAYCHANGU_WEBHOOK_SECRET` to show PayChangu mobile money. PayChangu checkouts must total a whole Kwacha. Wirefen confirms stock first; only then can the customer start a mobile-money request. The customer’s checkout page polls server-side PayChangu verification, while the signed webhook provides an additional settlement path. PayChangu credentials are never exposed to the browser. Stripe/Europe is not configured.
+Guest household checkout places an order without an account. Pay on delivery remains available everywhere. For Malawi, configure `CURRENCY=MWK`, verified MWK listing prices, and server-side `PAYCHANGU_SECRET_KEY` plus `PAYCHANGU_WEBHOOK_SECRET` to show PayChangu mobile money. PayChangu checkouts must total a whole Kwacha. Checkout reserves available stock immediately; the customer can then start a mobile-money request. The customer’s checkout page polls server-side PayChangu verification, while the signed webhook provides an additional settlement path. PayChangu credentials are never exposed to the browser. Stripe/Europe is not configured.
 
 Available stock and supplier locations are restricted to admin reports. The original specification's public `min_volume` and `max_volume` filters are intentionally unavailable to buyers because repeated filter queries would reveal hidden inventory.
 
@@ -118,7 +118,7 @@ All responses are JSON except the SMS webhook, which returns TwiML. Send JSON wi
 | POST | `/api/v1/guest-orders/basket` | Public household checkout; supports pay on delivery and configured PayChangu (MWK) |
 | GET | `/api/v1/guest-orders/:id/payment-status` | Checkout ID bearer token; returns sanitized status and verifies pending PayChangu payments server-side |
 | GET | `/api/v1/paychangu/operators` | Public when PayChangu is enabled; returns Malawi mobile-money operators |
-| POST | `/api/v1/paychangu/initialize` | Checkout ID bearer token; starts payment only after staff confirms stock |
+| POST | `/api/v1/paychangu/initialize` | Checkout ID bearer token; starts payment after household checkout reserves stock |
 | POST | `/api/v1/paychangu/webhook` | PayChangu; HMAC-signed webhook verified against the provider before settlement |
 | POST | `/api/v1/orders` | Buyer |
 | GET | `/api/v1/orders` | Buyer sees own; Admin sees all |

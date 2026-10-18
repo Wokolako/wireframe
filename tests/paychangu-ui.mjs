@@ -5,7 +5,7 @@ import {startNextDev} from './next-dev-server.mjs';
 const {base,child}=await startNextDev({port:3016});
 let browser;
 try{
- let statusPolls=0,initialized=false,paid=false,checkoutBody,initializeBody;
+ let initialized=false,paid=false,checkoutBody,initializeBody;
  browser=await chromium.launch({channel:'chrome',headless:true});
  const page=await browser.newPage({viewport:{width:390,height:844}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -17,8 +17,7 @@ try{
  });
  await page.route('**/api/v1/paychangu/operators',route=>route.fulfill({json:{data:[{ref_id:'airtel-test',name:'Airtel Money'}]}}));
  await page.route('**/api/v1/guest-orders/*/payment-status',async route=>{
-  statusPolls++;
-  await route.fulfill({json:{checkout_id:'1fca6a1a-b868-4fe0-8e74-8f06b7ee14d3',status:statusPolls>2?'Confirmed':'New',payment_method:'paychangu_mobile_money',payment_status:paid?'paid':initialized?'pending':'unpaid',currency:'MWK',total_minor:2500}});
+  await route.fulfill({json:{checkout_id:'1fca6a1a-b868-4fe0-8e74-8f06b7ee14d3',status:'Confirmed',payment_method:'paychangu_mobile_money',payment_status:paid?'paid':initialized?'pending':'unpaid',currency:'MWK',total_minor:2500}});
  });
  await page.route('**/api/v1/paychangu/initialize',async route=>{
   initializeBody=route.request().postDataJSON();
@@ -37,8 +36,7 @@ try{
  await page.getByLabel('Email').fill('buyer@example.com');
  await page.getByLabel('Delivery location').fill('Lilongwe City');
  await page.getByLabel('Malawi mobile money (PayChangu)').check();
- await page.getByRole('button',{name:'Place order · pay after confirmation'}).click();
- await page.getByText('Wirefen is confirming stock availability.').waitFor();
+ await page.getByRole('button',{name:'Place order · pay by mobile money'}).click();
  await page.getByLabel('Malawi mobile number').waitFor({timeout:12000});
  await page.getByLabel('Malawi mobile number').fill('+265991112200');
  const dismissInvitation=page.getByRole('button',{name:'Not now'});
@@ -51,7 +49,7 @@ try{
  paid=true;
  await page.getByText(/Payment received\. Your MWK 25 order is paid\./).waitFor({timeout:7000});
  assert.deepEqual(errors,[]);
- console.log('PASS: Malawi checkout selection, staff-confirmation gate, operator/mobile capture, PayChangu request and paid-state polling.');
+ console.log('PASS: Malawi checkout selection, immediate stock reservation, operator/mobile capture, PayChangu request and paid-state polling.');
 }finally{
  await browser?.close();
  child.kill();

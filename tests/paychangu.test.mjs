@@ -46,7 +46,7 @@ async function createCheckout(suffix){
  return call('/guest-orders/basket',{body:{items:[{listing_id:'produce-1',quantity:2}],contact_name:'MWK Buyer',contact_phone:`+265991112${suffix}`,contact_email:`mwk${suffix}@example.com`,delivery_location:'Lilongwe city',payment_method:'paychangu_mobile_money'}});
 }
 
-test('PayChangu requires MWK configuration, confirmed stock, and exact verified payment before settlement',async()=>{
+test('PayChangu requires MWK configuration, reserves stock at checkout, and verifies payment before settlement',async()=>{
  const config=await call('/config');
  assert.equal(config.data.currency,'MWK');
  assert.equal(config.data.capabilities.online_payments,false);
@@ -61,8 +61,7 @@ test('PayChangu requires MWK configuration, confirmed stock, and exact verified 
  assert.equal(placed.status,201);
  assert.equal(placed.data.total_minor,2500);
  assert.equal(placed.data.payment_status,'unpaid');
- const early=await call('/paychangu/initialize',{body:{checkout_id:placed.data.checkout_id,operator_ref_id:'test-airtel',mobile:'+265991112200'}});
- assert.equal(early.status,409);
+ assert.equal(placed.data.status,'Confirmed');
  assert.equal(initRequests,0);
  const admin=(await call('/auth/demo',{body:{role:'Admin'}})).cookie;
  assert.ok(admin);

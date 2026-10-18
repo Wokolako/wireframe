@@ -235,16 +235,19 @@ async function createGuestCheckout(req,res,v,items,aggregate){
   if(v.payment_method==='paychangu_mobile_money'&&(!payChanguEnabled()||currency!=='MWK'))throw fail(503,'PayChangu checkout requires an enabled MWK marketplace.');
   const totalMinor=checked.reduce((sum,item)=>sum+item.lineTotalMinor,0);
   if(v.payment_method==='paychangu_mobile_money'&&totalMinor%100!==0)throw fail(400,'PayChangu accepts whole-Kwacha checkout totals. Adjust the basket quantity or use pay on delivery.');
-  const response={id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'New',payment_method:v.payment_method,payment_status:'unpaid',total_minor:totalMinor,total:majorUnits(totalMinor),currency,message:v.payment_method==='paychangu_mobile_money'?'Order placed. Wirefen will confirm availability before mobile-money payment is requested.':'Order placed. Wirefen will confirm availability and delivery. Pay on delivery.'};
-  const inserted=await tx.run(`INSERT INTO guest_order_checkouts (id,idempotency_key,request_fingerprint,response_json,contact_name,contact_phone,contact_email,delivery_location,notes,payment_method,currency,total_minor,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,[checkoutId,key,fingerprint,JSON.stringify(response),v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,v.payment_method,currency,totalMinor,'New',createdAt]);
+  const response={id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'Confirmed',payment_method:v.payment_method,payment_status:'unpaid',total_minor:totalMinor,total:majorUnits(totalMinor),currency,message:v.payment_method==='paychangu_mobile_money'?'Order placed. You can pay by mobile money now.':'Order placed. Pay on delivery.'};
+  const inserted=await tx.run(`INSERT INTO guest_order_checkouts (id,idempotency_key,request_fingerprint,response_json,contact_name,contact_phone,contact_email,delivery_location,notes,payment_method,currency,total_minor,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,[checkoutId,key,fingerprint,JSON.stringify(response),v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,v.payment_method,currency,totalMinor,'Confirmed',createdAt]);
   if(!(inserted.rowCount??inserted.changes)){
    const conflict=await tx.get('SELECT request_fingerprint,response_json FROM guest_order_checkouts WHERE idempotency_key=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[key]);
    if(conflict.request_fingerprint!==fingerprint)throw fail(409,'This Idempotency-Key was already used for a different checkout.');
    return JSON.parse(conflict.response_json);
   }
   for(const item of checked){
-   await tx.run('INSERT INTO guest_orders (id,checkout_id,listing_id,produce_id,quantity,quantity_unit,payment_method,unit_price,unit_price_minor,line_total_minor,currency,contact_name,contact_phone,contact_email,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    [ids[item.index],checkoutId,item.listing_id,item.produce.id,item.quantity,item.produce.unit,v.payment_method,majorUnits(item.priceMinor),item.priceMinor,item.lineTotalMinor,currency,v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,createdAt]);
+   const reserved=await tx.run(`UPDATE listings SET available_volume=available_volume-? WHERE id=? AND available_volume>=? AND ${availabilityWhere('listings')}`,[item.quantity,item.listing_id,item.quantity,createdAt.slice(0,10)]);
+   if(!(reserved.rowCount??reserved.changes))throw fail(409,`${item.produce.name} is unavailable in the requested quantity.`);
+   await tx.run("INSERT INTO guest_orders (id,checkout_id,listing_id,produce_id,quantity,quantity_unit,payment_method,unit_price,unit_price_minor,line_total_minor,currency,contact_name,contact_phone,contact_email,delivery_location,notes,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    [ids[item.index],checkoutId,item.listing_id,item.produce.id,item.quantity,item.produce.unit,v.payment_method,majorUnits(item.priceMinor),item.priceMinor,item.lineTotalMinor,currency,v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,'Confirmed',createdAt]);
+   await audit(tx,{actor:req.user?.id||null,action:'inventory.reserved',entity:'listing',id:item.listing_id,details:{quantity:item.quantity,unit:item.produce.unit,checkout_id:checkoutId}});
   }
   return response;
  });

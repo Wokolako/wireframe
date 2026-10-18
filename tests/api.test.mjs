@@ -24,7 +24,7 @@ test('spreadsheet limits govern guest checkout and private admin stock reporting
  assert.ok(report.data.total_available_kg>0);
  assert.equal((await call('/admin/guest-orders',{cookie:admin})).data.length,2);
 });
-test('basket checkout enforces per-produce limits atomically and staff confirmation updates stock',async()=>{
+test('basket checkout enforces per-produce limits and reserves stock atomically',async()=>{
  const body={items:[{listing_id:'produce-1',quantity:1},{listing_id:'produce-2',quantity:2}],contact_name:'Basket Buyer',contact_phone:'+265991112250',contact_email:'basket@example.com',delivery_location:'Lilongwe city'};
  const before=Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume);
  assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:3},body.items[1]]}})).status,409);
@@ -34,12 +34,13 @@ test('basket checkout enforces per-produce limits atomically and staff confirmat
  assert.equal(placed.data.payment_method,'pay_on_delivery');
  const stored=await db.get('SELECT payment_method,payment_status,unit_price,currency FROM guest_orders WHERE id=?',[placed.data.ids[0]]);
  assert.equal(stored.payment_method,'pay_on_delivery');assert.equal(stored.payment_status,'unpaid');assert.ok(Number(stored.unit_price)>0);assert.ok(stored.currency);
- assert.equal((await call('/admin/guest-orders/'+placed.data.ids[0]+'/collect-payment',{cookie:admin,body:{}})).status,409);
+ assert.equal(placed.data.status,'Confirmed');
+ assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
  assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:1.1},body.items[1]]}})).status,409);
- const stockBefore=Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume);
+ const stockAfter=Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
- assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume),stockBefore-2);
+ assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume),stockAfter);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,200);
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before);
  const paidCheckout=await call('/guest-orders/basket',{body:{...body,contact_name:'Second Basket',contact_phone:'+265991112253',contact_email:'secondbasket@example.com'}});
@@ -139,9 +140,7 @@ test('last-unit confirmation reaches zero safely and concurrent confirmations ca
   await db.run('UPDATE listings SET available_volume=1 WHERE id=?',['produce-1']);
   const orderA=await call('/guest-orders',{body:{listing_id:'produce-1',quantity:1,contact_name:'Concurrent Buyer A',contact_phone:'+265991112264',contact_email:'concurrent-a@example.com',delivery_location:'Lilongwe city'}});
   const orderB=await call('/guest-orders',{body:{listing_id:'produce-1',quantity:1,contact_name:'Concurrent Buyer B',contact_phone:'+265991112265',contact_email:'concurrent-b@example.com',delivery_location:'Lilongwe city'}});
-  assert.equal(orderA.status,201);assert.equal(orderB.status,201);
-  const outcomes=await Promise.all([orderA,orderB].map(order=>call('/admin/guest-orders/'+order.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})));
-  assert.deepEqual(outcomes.map(result=>result.status).sort(),[200,409]);
+  assert.equal(orderA.status,201);assert.notEqual(orderB.status,201);
   assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),0);
   assert.ok(Number((await db.get('SELECT COUNT(*) AS count FROM audit_events WHERE action=\'inventory.reserved\'')).count)>=2);
  }finally{await db.run('UPDATE listings SET available_volume=? WHERE id=?',[original,'produce-1']);}
