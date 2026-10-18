@@ -9,7 +9,6 @@ export type RegionalFinancialAnalytics={regional:Array<{country:string;region:st
 export type Order={id:string;listing_id:string;title:string;volume:number;delivery_location:string;notes:string;status:string;created_at:string;buyer_name:string;phone:string;payment_status?:string;payment_ref?:string;payment_method?:string;amount_paid?:number;currency?:string};
 export type Payment={id:string;order_id:string;buyer_id:string;amount:number;currency:string;method:string;provider:string;bank_name?:string;account_or_phone:string;status:string;reference:string;notes?:string;created_at:string};
 export type PaymentInput={order_id:string;amount:number;currency:string;method:string;provider:string;bank_name?:string;account_or_phone:string;notes?:string};
-export type UssdSimulateResult={sessionId:string;phoneNumber:string;response:string;isEnd:boolean;menuText:string};
 export type Config={demo:boolean;market:string;currency:string;sms_ready:boolean;presentation?:boolean;auth_provider?:'clerk'|'local';clerk_publishable_key?:string|null;capabilities?:{guest_checkout:boolean;online_payments:boolean;paychangu_mobile_money?:boolean;ussd:boolean;sms:boolean}};
 let getToken:(()=>Promise<string|null>)|undefined;
 export function setTokenGetter(getter:typeof getToken){getToken=getter;}
