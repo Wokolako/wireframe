@@ -7,15 +7,16 @@ const quote=[
  {base:'EUR',quote:'MWK',date:'2026-10-15',rate:2000},
  {base:'EUR',quote:'ZMW',date:'2026-10-14',rate:24},
  {base:'EUR',quote:'ZAR',date:'2026-10-16',rate:20},
+ {base:'EUR',quote:'GBP',date:'2026-10-16',rate:0.86},
 ];
 
 test('exchange rates validate provenance and coalesce provider requests',async()=>{
  let calls=0,url='';
  const get=createExchangeService({clock:()=>start,fetcher:async target=>{calls++;url=target;return {ok:true,json:async()=>quote};}});
  const [a,b]=await Promise.all([get('ZAR'),get('ZAR')]);
- assert.equal(a.rates.EUR,1);assert.equal(a.rates.USD,1.16);assert.equal(a.rates.MWK,2000);assert.equal(a.rates.ZMW,24);assert.equal(a.rates.ZAR,20);
+ assert.equal(a.rates.EUR,1);assert.equal(a.rates.USD,1.16);assert.equal(a.rates.MWK,2000);assert.equal(a.rates.ZMW,24);assert.equal(a.rates.ZAR,20);assert.equal(a.rates.GBP,0.86);
  assert.equal(a.dates.USD,'2026-10-16');assert.equal(a.dates.MWK,'2026-10-15');assert.equal(a.dates.ZMW,'2026-10-14');
- assert.match(a.sources.MWK,/\/v2\/rate\/eur\/mwk/);assert.match(url,/\/v2\/rates\?base=EUR&quotes=USD,MWK,ZMW,ZAR&expand=providers/);assert.deepEqual(a,b);
+ assert.match(a.sources.MWK,/\/v2\/rate\/eur\/mwk/);assert.match(url,/\/v2\/rates\?base=EUR&quotes=USD,MWK,ZMW,ZAR,GBP&expand=providers/);assert.deepEqual(a,b);
  await get('ZAR');assert.equal(calls,1);assert.equal(100/a.rates.ZAR*a.rates.USD,5.8);
 });
 

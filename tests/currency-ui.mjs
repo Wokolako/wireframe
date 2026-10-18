@@ -10,7 +10,7 @@ try{
  browser=await chromium.launch({channel:'chrome',headless:true});
  const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
  const today=new Date().toISOString().slice(0,10);
- const fixture={base:'EUR',rates:{EUR:1,USD:1.2,MWK:2000,ZMW:25,ZAR:20},dates:{USD:today,MWK:today,ZMW:today,ZAR:today},fetched_at:new Date().toISOString(),source:'Frankfurter blended reference rates',stale:false};
+ const fixture={base:'EUR',rates:{EUR:1,USD:1.2,MWK:2000,ZMW:25,ZAR:20,GBP:0.9},dates:{USD:today,MWK:today,ZMW:today,ZAR:today,GBP:today},fetched_at:new Date().toISOString(),source:'Frankfurter blended reference rates',stale:false};
  let outage=false;
  await context.route('**/api/v1/exchange-rates',route=>outage?route.fulfill({status:503,json:{error:'Exchange rates are unavailable. Please try again shortly.'}}):route.fulfill({json:fixture}));
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -22,6 +22,8 @@ try{
  await page.getByRole('button',{name:'Swap currencies'}).click();assert.match(await page.locator('.conversion-result').innerText(),/€83.33/);
  await page.getByLabel('From currency').selectOption('MWK');await page.getByLabel('To currency').selectOption('ZMW');await page.getByLabel('Amount',{exact:true}).fill('1000');
  assert.match(await page.locator('.conversion-result').innerText(),/ZMW 12.50/);
+ await page.getByLabel('From currency').selectOption('EUR');await page.getByLabel('To currency').selectOption('GBP');await page.getByLabel('Amount',{exact:true}).fill('100');
+ assert.match(await page.locator('.conversion-result').innerText(),/£90.00/);
  await page.getByLabel('Amount',{exact:true}).fill('-1');await page.locator('#conversion-error').waitFor();assert.match(await page.locator('.conversion-result').innerText(),/unavailable/);
  await page.getByLabel('Amount',{exact:true}).fill('100');await page.getByLabel('From currency').selectOption('EUR');await page.getByLabel('To currency').selectOption('USD');
  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/currency-desktop.png',fullPage:true});
