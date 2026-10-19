@@ -1,4 +1,5 @@
 import {normalizeGeography,hasGeography} from '../shared/geography.mjs';
+import {normalizePhone} from '../shared/phone.mjs';
 import {guestLimitFor,guestLimits,loadLimitsFromDb} from '../shared/guest-limits.mjs';
 import {parseCost,costFields} from '../shared/finance.mjs';
 import {readBaseline,saveBaseline,financialRoutes} from './financial.mjs';
@@ -32,7 +33,27 @@ const authorizedParties=process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filt
 if(!production)authorizedParties.push('http://localhost:3000','http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001');
 if(clerkEnabled&&production&&!authorizedParties.length)throw new Error('APP_ORIGIN is required with Clerk in production.');
 const demo = !production && process.env.SEED_DEMO !== 'false';
-const payChanguEnabled=()=>!!process.env.PAYCHANGU_SECRET_KEY&&String(process.env.CURRENCY||'ZAR').toUpperCase()==='MWK'&&(!demo||process.env.PAYCHANGU_TEST_MODE==='true');
+export const payChanguEnabled=()=>!!process.env.PAYCHANGU_SECRET_KEY&&(!demo||process.env.PAYCHANGU_TEST_MODE==='true');
+export async function convertToMWK(amount, fromCurrency='USD'){
+ const from=String(fromCurrency||'USD').toUpperCase();
+ const num=Number(amount);
+ if(!Number.isFinite(num)||num<=0)return {amountMWK:0,rate:1,fromCurrency:from};
+ if(from==='MWK')return {amountMWK:Math.round(num),rate:1,fromCurrency:'MWK'};
+ try{
+  const exchange=await getExchangeRates(from==='EUR'?'USD':from);
+  const rates=exchange?.rates;
+  if(rates&&rates[from]&&rates['MWK']){
+   const rate=rates['MWK']/rates[from];
+   const amountMWK=Math.max(1,Math.round(num*rate));
+   return {amountMWK,rate,fromCurrency:from};
+  }
+ }catch(e){}
+ const fallbackPerEUR={EUR:1,USD:1.1231,MWK:1945.5,ZAR:18.4793,ZMW:22.455,GBP:0.84458};
+ const fromRate=fallbackPerEUR[from]||fallbackPerEUR.USD;
+ const rate=fallbackPerEUR.MWK/fromRate;
+ const amountMWK=Math.max(1,Math.round(num*rate));
+ return {amountMWK,rate,fromCurrency:from};
+}
 if(demo) await seed(db);
 export const app = express();
 app.disable('x-powered-by');
@@ -60,7 +81,7 @@ app.use('/api/v1/auth',authLimit);
 app.use(['/api/v1/auth/register','/api/v1/auth/login','/api/v1/auth/demo'],(req,res,next)=>clerkEnabled?next(fail(410,'Use Clerk to sign in or create your account.')):next());
 app.post('/api/v1/auth/onboard',async(req,res)=>{if(!clerkEnabled||!req.clerkUserId)throw fail(401,'Sign in with Clerk to continue.');const id=await createClerkProfile(db,req.clerkUserId,req.body);res.status(201).json(await publicUser(await db.get('SELECT * FROM users WHERE id=?',[id])));});
 async function session(res,u){const token=randomBytes(32).toString('hex');await db.run('INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,?)',[hash(token),u.id,new Date(Date.now()+604800000).toISOString()]); res.cookie('wirefen_session',token,{httpOnly:true,sameSite:'lax',secure:production,maxAge:604800000,path:'/'});return publicUser(u);}
-const phone=z.string().regex(/^\+[1-9]\d{7,14}$/,'Use an international phone number, such as +27821234567.');
+const phone=z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+[1-9]\d{7,14}$/,'Enter a valid phone number (e.g. 0881522474, 265 881522474, or +265881522474).'));
 app.get('/api/v1/exchange-rates',rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false}),async(req,res)=>res.json(await getExchangeRates(process.env.CURRENCY || 'ZAR')));
 app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'South Africa (sample market)',currency:process.env.CURRENCY || 'ZAR',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL),capabilities:{guest_checkout:true,online_payments:false,paychangu_mobile_money:payChanguEnabled(),ussd:!!process.env.USSD_WEBHOOK_SECRET,sms:!!(process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}}));
 app.post('/api/v1/auth/register',async(req,res)=>{
@@ -149,7 +170,7 @@ const checkoutLimit=rateLimit({windowMs:15*60*1000,limit:production?10:1000,stan
 const paymentLimit=rateLimit({windowMs:60000,limit:production?20:1000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many payment requests. Please try again shortly.'}});
 let payChanguOperatorsCache;
 async function payChanguOperators(){
- if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured for this MWK marketplace.');
+ if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured.');
  if(payChanguOperatorsCache&&Date.now()-payChanguOperatorsCache.updatedAt<300000)return payChanguOperatorsCache.items;
  const response=await fetch('https://api.paychangu.com/mobile-money/',{headers:{Accept:'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},signal:AbortSignal.timeout(10000)});
  const body=await response.json().catch(()=>null);
@@ -170,8 +191,11 @@ async function settlePayChanguCheckout(checkout,verified,chargeId){
  const details=verified?.data??verified,status=payChanguStatus(details?.status||verified?.status);
  if(status==='success'){
   const currency=String(details?.currency||'').toUpperCase(),normalizedCurrency=currency==='MK'?'MWK':currency;
-  const paidAmount=Number(details?.amount),expectedAmount=majorUnits(checkout.total_minor);
-  if(String(details?.charge_id||'')!==chargeId||normalizedCurrency!=='MWK'||!Number.isFinite(paidAmount)||Math.abs(paidAmount-expectedAmount)>0.001)throw fail(409,'The verified payment does not match this checkout.');
+  let parsedResponse={};
+  try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
+  const expectedMWK = parsedResponse.mwk_total || (checkout.currency === 'MWK' ? majorUnits(checkout.total_minor) : (await convertToMWK(majorUnits(checkout.total_minor), checkout.currency)).amountMWK);
+  const paidAmount=Number(details?.amount);
+  if(String(details?.charge_id||'')!==chargeId||normalizedCurrency!=='MWK'||!Number.isFinite(paidAmount)||Math.abs(paidAmount-expectedMWK)>0.001)throw fail(409,'The verified payment does not match this checkout.');
   return db.transaction(async tx=>{
    const current=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[checkout.id]);
    if(!current)throw fail(404,'Checkout not found.');
@@ -181,7 +205,7 @@ async function settlePayChanguCheckout(checkout,verified,chargeId){
    const result=await tx.run("UPDATE guest_order_checkouts SET payment_status='paid',provider_reference=? WHERE id=? AND payment_status='pending' AND provider_charge_id=?",[reference,current.id,chargeId]);
    if(!(result.rowCount??result.changes))return (await tx.get('SELECT payment_status FROM guest_order_checkouts WHERE id=?',[current.id]))?.payment_status||'failed';
    await tx.run("UPDATE guest_orders SET payment_status='paid',paid_at=? WHERE checkout_id=? AND payment_status='pending'",[now(),current.id]);
-   await audit(tx,{action:'payment.paychangu_settled',entity:'guest_checkout',id:current.id,details:{provider_reference:reference,currency:'MWK',amount:expectedAmount}});
+   await audit(tx,{action:'payment.paychangu_settled',entity:'guest_checkout',id:current.id,details:{provider_reference:reference,currency:'MWK',amount:expectedMWK,original_currency:checkout.currency,original_amount:majorUnits(checkout.total_minor)}});
    return 'paid';
   });
  }
@@ -202,7 +226,7 @@ async function settlePayChanguCheckout(checkout,verified,chargeId){
 app.get('/api/v1/paychangu/operators',paymentLimit,async(req,res)=>res.json({data:await payChanguOperators()}));
 const contact=z.object({contact_name:z.string().trim().min(2).max(100),contact_phone:phone,
  contact_email:z.email().max(200)});
-const checkoutSchema=contact.extend({payment_method:z.enum(['pay_on_delivery','paychangu_mobile_money']).default('pay_on_delivery'),delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default('')});
+const checkoutSchema=contact.extend({payment_method:z.enum(['paychangu_mobile_money','malawian_bank','pay_on_delivery']).default('paychangu_mobile_money'),delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default('')});
 async function createGuestCheckout(req,res,v,items,aggregate){
  const key=req.get('Idempotency-Key');
  if(!key||!/^[A-Za-z0-9._:-]{16,128}$/.test(key))throw fail(400,'A valid Idempotency-Key is required for checkout.');
@@ -232,10 +256,14 @@ async function createGuestCheckout(req,res,v,items,aggregate){
   for(const item of checked){const next=(totals.get(item.produce.id)||0)+item.quantity;if(next>item.cap.max)throw fail(409,`${item.produce.name} has a household limit of ${item.cap.max} ${item.produce.unit} across orders in 24 hours. Sign in for a bulk request.`);totals.set(item.produce.id,next);}
   const currency=checked[0].currency||process.env.CURRENCY||'ZAR';
   if(checked.some(item=>item.currency&&item.currency!==currency))throw fail(409,'All items in a checkout must use the same currency.');
-  if(v.payment_method==='paychangu_mobile_money'&&(!payChanguEnabled()||currency!=='MWK'))throw fail(503,'PayChangu checkout requires an enabled MWK marketplace.');
+  if(v.payment_method==='paychangu_mobile_money'&&!payChanguEnabled())throw fail(503,'PayChangu checkout is not currently available.');
   const totalMinor=checked.reduce((sum,item)=>sum+item.lineTotalMinor,0);
-  if(v.payment_method==='paychangu_mobile_money'&&totalMinor%100!==0)throw fail(400,'PayChangu accepts whole-Kwacha checkout totals. Adjust the basket quantity or use pay on delivery.');
-  const response={id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'Confirmed',payment_method:v.payment_method,payment_status:'unpaid',total_minor:totalMinor,total:majorUnits(totalMinor),currency,message:v.payment_method==='paychangu_mobile_money'?'Order placed. You can pay by mobile money now.':'Order placed. Pay on delivery.'};
+  const orderTotal=majorUnits(totalMinor);
+  if(v.payment_method==='paychangu_mobile_money'&&currency==='MWK'&&totalMinor%100!==0)throw fail(400,'PayChangu accepts whole-Kwacha checkout totals. Adjust the basket quantity.');
+  const mwkConversion = await convertToMWK(orderTotal, currency);
+  const mwkTotal = mwkConversion.amountMWK;
+  const mwkTotalMinor = mwkTotal * 100;
+  const response={id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'Confirmed',payment_method:v.payment_method,payment_status:'unpaid',total_minor:totalMinor,total:orderTotal,currency,mwk_total:mwkTotal,mwk_total_minor:mwkTotalMinor,exchange_rate_to_mwk:mwkConversion.rate,message:v.payment_method==='malawian_bank'?'Order placed. Complete your transfer using your Malawian bank account.':'Order placed. Complete your payment in-app via PayChangu.'};
   const inserted=await tx.run(`INSERT INTO guest_order_checkouts (id,idempotency_key,request_fingerprint,response_json,contact_name,contact_phone,contact_email,delivery_location,notes,payment_method,currency,total_minor,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,[checkoutId,key,fingerprint,JSON.stringify(response),v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,v.payment_method,currency,totalMinor,'Confirmed',createdAt]);
   if(!(inserted.rowCount??inserted.changes)){
    const conflict=await tx.get('SELECT request_fingerprint,response_json FROM guest_order_checkouts WHERE idempotency_key=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[key]);
@@ -267,14 +295,14 @@ app.post('/api/v1/guest-orders/basket',checkoutLimit,async(req,res)=>{
  await createGuestCheckout(req,res,v,items,true);
 });
 app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
- if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured for this MWK marketplace.');
- const input=z.object({checkout_id:z.string().uuid(),operator_ref_id:z.string().min(1).max(100),mobile:z.string().trim().regex(/^\+265\d{9}$/,'Enter a Malawi mobile number with country code and 9 digits, such as +265991234567.')}).strict().parse(req.body);
+ if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured.');
+ const input=z.object({checkout_id:z.string().uuid(),operator_ref_id:z.string().min(1).max(100),mobile:z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+265\d{9}$/,'Enter a valid Malawi mobile number, such as 0881522474, 265 881522474, or +265991234567.'))}).strict().parse(req.body);
  const operators=await payChanguOperators();
  if(!operators.some(operator=>String(operator.ref_id)===input.operator_ref_id))throw fail(400,'Choose a supported PayChangu mobile-money operator.');
  const checkout=await db.transaction(async tx=>{
   const row=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[input.checkout_id]);
   if(!row)throw fail(404,'Checkout not found.');
-  if(row.payment_method!=='paychangu_mobile_money'||row.currency!=='MWK')throw fail(409,'This checkout was not placed for PayChangu mobile-money payment.');
+  if(row.payment_method!=='paychangu_mobile_money')throw fail(409,'This checkout was not placed for PayChangu mobile-money payment.');
   if(row.status!=='Confirmed')throw fail(409,'Wirefen must confirm stock availability before mobile-money payment can start.');
   if(row.payment_status==='paid')return {...row,alreadyPaid:true};
   if(row.payment_status==='pending'){
@@ -288,10 +316,13 @@ app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
  });
  if(checkout.alreadyPaid)return res.json({checkout_id:checkout.id,status:'paid',message:'This checkout has already been paid.'});
  if(checkout.existingAttempt)return res.json({checkout_id:checkout.id,charge_id:checkout.provider_charge_id,status:'pending',message:'A mobile-money request is already in progress. Check its status before retrying.'});
- const amount=majorUnits(checkout.total_minor),[first_name='',...lastNames]=checkout.contact_name.trim().split(/\s+/),last_name=lastNames.join(' ');
+ let parsedResponse={};
+ try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
+ const mwkAmount=parsedResponse.mwk_total||(checkout.currency==='MWK'?majorUnits(checkout.total_minor):(await convertToMWK(majorUnits(checkout.total_minor),checkout.currency)).amountMWK);
+ const [first_name='',...lastNames]=checkout.contact_name.trim().split(/\s+/),last_name=lastNames.join(' ');
  let response;
  try{
-  response=await fetch('https://api.paychangu.com/mobile-money/payments/initialize',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},body:JSON.stringify({mobile:input.mobile.slice(4),mobile_money_operator_ref_id:input.operator_ref_id,amount:String(amount),charge_id:checkout.provider_charge_id,email:checkout.contact_email,first_name,last_name}),signal:AbortSignal.timeout(15000)});
+  response=await fetch('https://api.paychangu.com/mobile-money/payments/initialize',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},body:JSON.stringify({mobile:input.mobile.slice(4),mobile_money_operator_ref_id:input.operator_ref_id,amount:String(mwkAmount),charge_id:checkout.provider_charge_id,email:checkout.contact_email,first_name,last_name}),signal:AbortSignal.timeout(15000)});
  }catch(error){
   throw fail(502,'PayChangu could not be reached. The request may still be pending; check payment status before retrying.');
  }
@@ -307,16 +338,19 @@ app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
  }
  const chargeId=String(body.data.charge_id);
  await db.run('UPDATE guest_order_checkouts SET provider_charge_id=? WHERE id=? AND provider_charge_id=?',[chargeId,checkout.id,checkout.provider_charge_id]);
- res.status(201).json({checkout_id:checkout.id,charge_id:chargeId,amount,currency:'MWK',status:'pending',message:body.message||'Approve the mobile-money request on your phone.'});
+ res.status(201).json({checkout_id:checkout.id,charge_id:chargeId,amount:mwkAmount,currency:'MWK',original_amount:majorUnits(checkout.total_minor),original_currency:checkout.currency,status:'pending',message:body.message||'Approve the mobile-money request on your phone.'});
 });
 app.get('/api/v1/guest-orders/:id/payment-status',paymentLimit,async(req,res)=>{
- let checkout=await db.get('SELECT id,status,payment_method,payment_status,currency,total_minor,provider_charge_id FROM guest_order_checkouts WHERE id=?',[req.params.id]);
+ let checkout=await db.get('SELECT id,status,payment_method,payment_status,currency,total_minor,provider_charge_id,response_json FROM guest_order_checkouts WHERE id=?',[req.params.id]);
  if(!checkout)throw fail(404,'Checkout not found.');
  if(checkout.payment_status==='pending'&&checkout.provider_charge_id){
   const verified=await verifyPayChanguCharge(checkout.provider_charge_id);
   checkout.payment_status=await settlePayChanguCheckout(checkout,verified,checkout.provider_charge_id);
  }
- res.json({checkout_id:checkout.id,status:checkout.status,payment_method:checkout.payment_method,payment_status:checkout.payment_status,currency:checkout.currency,total_minor:Number(checkout.total_minor)});
+ let parsedResponse={};
+ try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
+ const mwkTotal=parsedResponse.mwk_total||(checkout.currency==='MWK'?majorUnits(checkout.total_minor):(await convertToMWK(majorUnits(checkout.total_minor),checkout.currency)).amountMWK);
+ res.json({checkout_id:checkout.id,status:checkout.status,payment_method:checkout.payment_method,payment_status:checkout.payment_status,currency:checkout.currency,total_minor:Number(checkout.total_minor),mwk_total:mwkTotal,exchange_rate:parsedResponse.exchange_rate_to_mwk||null});
 });
 app.post('/api/v1/paychangu/webhook',paymentLimit,async(req,res)=>{
  const secret=process.env.PAYCHANGU_WEBHOOK_SECRET,signature=(req.get('signature')||req.get('x-paychangu-signature')||'').replace(/^sha256=/i,'');
@@ -399,7 +433,7 @@ app.post('/api/v1/admin/guest-orders/:id/collect-payment',permit('Admin'),async(
   let order=await tx.get('SELECT status,payment_method,payment_status,id AS checkout_id FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[req.params.id]);
   if(!order){const line=await tx.get('SELECT checkout_id FROM guest_orders WHERE id=?',[req.params.id]);if(line)order=await tx.get('SELECT status,payment_method,payment_status,id AS checkout_id FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[line.checkout_id]);}
   if(!order)throw fail(404,'Guest order not found.');
-  if(order.status!=='Confirmed'||order.payment_method!=='pay_on_delivery')throw fail(409,'Confirm the pay-on-delivery order before recording payment.');
+  if(order.status!=='Confirmed')throw fail(409,'Confirm the order before recording payment.');
   if(order.payment_status==='paid')throw fail(409,'Payment has already been recorded.');
   const result=await tx.run("UPDATE guest_orders SET payment_status='paid',paid_at=? WHERE checkout_id=? AND status='Confirmed' AND payment_status='unpaid'",[paid_at,order.checkout_id]);
   if(!(result.rowCount??result.changes))throw fail(409,'The order changed before payment could be recorded.');

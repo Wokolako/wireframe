@@ -31,9 +31,9 @@ test('basket checkout enforces per-produce limits and reserves stock atomically'
  assert.equal((await db.get('SELECT COUNT(*) AS count FROM guest_orders WHERE contact_phone=?',[body.contact_phone])).count,0);
  const placed=await call('/guest-orders/basket',{body});assert.equal(placed.status,201);assert.equal(placed.data.ids.length,2);
  const admin=await demo('Admin');
- assert.equal(placed.data.payment_method,'pay_on_delivery');
+ assert.equal(placed.data.payment_method,'paychangu_mobile_money');
  const stored=await db.get('SELECT payment_method,payment_status,unit_price,currency FROM guest_orders WHERE id=?',[placed.data.ids[0]]);
- assert.equal(stored.payment_method,'pay_on_delivery');assert.equal(stored.payment_status,'unpaid');assert.ok(Number(stored.unit_price)>0);assert.ok(stored.currency);
+ assert.equal(stored.payment_method,'paychangu_mobile_money');assert.equal(stored.payment_status,'unpaid');assert.ok(Number(stored.unit_price)>0);assert.ok(stored.currency);
  assert.equal(placed.data.status,'Confirmed');
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
  assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:1.1},body.items[1]]}})).status,409);
@@ -43,14 +43,19 @@ test('basket checkout enforces per-produce limits and reserves stock atomically'
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume),stockAfter);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,200);
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before);
- const paidCheckout=await call('/guest-orders/basket',{body:{...body,contact_name:'Second Basket',contact_phone:'+265991112253',contact_email:'secondbasket@example.com'}});
+ const paidCheckout=await call('/guest-orders/basket',{body:{...body,contact_name:'Second Basket',contact_phone:'0881522474',contact_email:'secondbasket@example.com'}});
  assert.equal(paidCheckout.status,201);
+ const checkoutRow=await db.get('SELECT contact_phone FROM guest_order_checkouts WHERE id=?',[paidCheckout.data.checkout_id]);
+ assert.equal(checkoutRow.contact_phone,'+265881522474');
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id+'/collect-payment',{body:{}})).status,401);
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id+'/collect-payment',{cookie:admin,body:{}})).status,200);
  assert.equal((await db.get('SELECT payment_status FROM guest_orders WHERE id=?',[paidCheckout.data.ids[1]])).payment_status,'paid');
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id+'/collect-payment',{cookie:admin,body:{}})).status,409);
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,409);
+ const bankOrder=await call('/guest-orders/basket',{body:{...body,contact_name:'Bank Buyer',contact_phone:'0881522474',contact_email:'bankbuyer@example.com',payment_method:'malawian_bank'}});
+ assert.equal(bankOrder.status,201);
+ assert.equal(bankOrder.data.payment_method,'malawian_bank');
 });
 test('guest checkout uses count units from the spreadsheet for verified produce',async()=>{
  const avocado=(await call('/listings/produce-3')).data;

@@ -21,7 +21,7 @@ globalThis.fetch=async(input,options={})=>{
  if(url==='https://api.paychangu.com/mobile-money/payments/initialize'){
   initRequests++;
   const body=JSON.parse(options.body);
-  assert.equal(body.mobile,'991112200');
+  assert.ok(['991112200','881522474'].includes(body.mobile));
   chargeAmounts.set(body.charge_id,body.amount);
   return new Response(JSON.stringify({status:'success',message:'Approve on your phone',data:{charge_id:body.charge_id}}),{status:200});
  }
@@ -46,14 +46,19 @@ async function createCheckout(suffix){
  return call('/guest-orders/basket',{body:{items:[{listing_id:'produce-1',quantity:2}],contact_name:'MWK Buyer',contact_phone:`+265991112${suffix}`,contact_email:`mwk${suffix}@example.com`,delivery_location:'Lilongwe city',payment_method:'paychangu_mobile_money'}});
 }
 
-test('PayChangu requires MWK configuration, reserves stock at checkout, and verifies payment before settlement',async()=>{
+test('PayChangu requires secret key configuration, supports multi-currency conversion to MWK, reserves stock at checkout, and verifies payment before settlement',async()=>{
  const config=await call('/config');
  assert.equal(config.data.currency,'MWK');
  assert.equal(config.data.capabilities.online_payments,false);
  assert.equal(config.data.capabilities.paychangu_mobile_money,true);
- process.env.CURRENCY='ZAR';
+ const originalKey=process.env.PAYCHANGU_SECRET_KEY;
+ delete process.env.PAYCHANGU_SECRET_KEY;
  assert.equal((await call('/config')).data.capabilities.paychangu_mobile_money,false);
  assert.equal((await call('/paychangu/operators')).status,503);
+ process.env.PAYCHANGU_SECRET_KEY=originalKey;
+ process.env.CURRENCY='USD';
+ assert.equal((await call('/config')).data.capabilities.paychangu_mobile_money,true);
+ assert.equal((await call('/paychangu/operators')).status,200);
  process.env.CURRENCY='MWK';
  const fractional=await call('/guest-orders/basket',{body:{items:[{listing_id:'produce-1',quantity:1}],contact_name:'Fractional Buyer',contact_phone:'+265991112202',contact_email:'fractional@example.com',delivery_location:'Lilongwe city',payment_method:'paychangu_mobile_money'}});
  assert.equal(fractional.status,400);
@@ -76,7 +81,7 @@ test('PayChangu requires MWK configuration, reserves stock at checkout, and veri
  assert.equal((await call(`/guest-orders/${placed.data.checkout_id}/payment-status`)).data.payment_status,'pending');
  verifyStatus='failed';
  assert.equal((await call(`/guest-orders/${placed.data.checkout_id}/payment-status`)).data.payment_status,'failed');
- const retry=await call('/paychangu/initialize',{body:{checkout_id:placed.data.checkout_id,operator_ref_id:'test-airtel',mobile:'+265991112200'}});
+ const retry=await call('/paychangu/initialize',{body:{checkout_id:placed.data.checkout_id,operator_ref_id:'test-airtel',mobile:'265 881522474'}});
  assert.equal(retry.status,201);
  assert.notEqual(retry.data.charge_id,first.data.charge_id);
  verifyStatus='successful';

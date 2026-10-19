@@ -3,7 +3,8 @@ import {navigate as go} from './navigation';
 import Link from 'next/link';
 import {ProducePriceReferences} from './ProducePriceReferences';
 import {CountrySelect,LocationSettings,FinancialAnalytics,VerificationAssignments,AgentWorkspace} from './Compliance';
-import {StorefrontMarketplace as Marketplace,StorefrontDetail as ProduceDetail,StorefrontBasket,AdminListingReport,AdminGuestOrders,BulkRequests} from './Storefront';
+import {StorefrontMarketplace as Marketplace,StorefrontDetail as ProduceDetail,StorefrontBasket,AdminListingReport,AdminGuestOrders,BulkRequests,readSavedDelivery,saveSavedDelivery,type DeliveryAddress} from './Storefront';
+import {normalizePhone} from '../shared/phone.mjs';
 import {ListingComposer} from './ListingComposer';
 import {hasGeography} from '../shared/geography.mjs';
 import {guestLimitFor} from '../shared/guest-limits.mjs';
@@ -154,15 +155,23 @@ function PaymentModal({order,close,onSuccess,notify}:{order:Order;close:()=>void
      </div>
     </Field>
     {method==='malawian_bank'&&(<>
-     <Field label="Malawian Bank" hint="Select your bank">
-      <select value={bankName} onChange={e=>setBankName(e.target.value)}>
-       <option value="National Bank of Malawi">National Bank of Malawi (Mo626 / Direct)</option>
-       <option value="Standard Bank Malawi">Standard Bank Malawi</option>
-       <option value="FDH Bank">FDH Bank</option>
-       <option value="NBS Bank">NBS Bank</option>
-       <option value="Ecobank Malawi">Ecobank Malawi</option>
-       <option value="Centenary Bank">Centenary Bank (Malawi)</option>
-      </select>
+     <Field label="Malawian Bank" hint="Click a bank card to select">
+      <div className="bank-cards-grid">
+       {[
+         { id: 'National Bank of Malawi', name: 'National Bank', sub: 'Mo626 / Direct' },
+         { id: 'Standard Bank Malawi', name: 'Standard Bank', sub: '247 Online' },
+         { id: 'FDH Bank', name: 'FDH Bank', sub: 'FDH Mobile' },
+         { id: 'NBS Bank', name: 'NBS Bank', sub: 'EazyMobile' },
+         { id: 'Ecobank Malawi', name: 'Ecobank', sub: 'Omni Lite' },
+         { id: 'Centenary Bank', name: 'Centenary Bank', sub: 'Direct Transfer' }
+       ].map(b => (
+        <div key={b.id} className={`bank-card-tile ${bankName===b.id?'selected':''}`} onClick={()=>setBankName(b.id)}>
+         <Building2 size={16} style={{marginBottom:4,color:bankName===b.id?'#3730a3':'inherit'}}/>
+         <span>{b.name}</span>
+         <small>{b.sub}</small>
+        </div>
+       ))}
+      </div>
      </Field>
      <Field label="Bank Account / Debit Card Number" hint="Your account number or debit card">
       <input required placeholder="e.g. 1004589234 or card number" value={accountOrPhone} onChange={e=>setAccountOrPhone(e.target.value)}/>
@@ -263,5 +272,38 @@ function LegacyNewListing({farmerId,user,currency,notify}:{farmerId:string;user:
 
 function Admin({notify}:{notify:(s:string)=>void}){const [farmers,setFarmers]=useState<Farmer[]>([]),[search,setSearch]=useState(''),[selected,setSelected]=useState(''),[error,setError]=useState(''),[loading,setLoading]=useState(true);useEffect(()=>{api<Farmer[]>('/farmers').then(setFarmers).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);const filtered=farmers.filter(f=>`${f.id} ${f.name} ${f.farm_name} ${f.phone} ${f.country||''} ${f.region||''} ${f.locality||''}`.toLowerCase().includes(search.toLowerCase()));function exportCsv(){const csv=['Farmer ID,Farm,Name,Phone,Country,District/Region,Locality/Ward,Location,Verification,Baseline',...filtered.map(f=>[f.id,f.farm_name,f.name,f.phone,f.country||'',f.region||f.district||'',f.locality||f.ward||'',f.location,f.verification_status,f.baseline_status||'Not started'].map(v=>'"'+String(v??'').replace(/^[=+@-]/,"'").replaceAll('"','""')+'"').join(','))].join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='wirefen-farmers.csv';a.click();URL.revokeObjectURL(url);notify('Farmer directory exported.');}return <><div className="page-heading"><div><h1>A helping hand, at every step.</h1><p>Find a farmer and capture their details while youÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢re on the phone.</p></div><button className="secondary" onClick={exportCsv}><Download size={16}/>Export directory</button></div><div className="assist-toolbar"><label className="search-field"><Search size={18}/><span className="sr-only">Find farmer</span><input placeholder="Search by name, phone or farmer IDÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦" value={search} onChange={e=>setSearch(e.target.value)}/></label><Link className="button secondary" href="/requests"><ClipboardList size={17}/>Order request queue</Link></div><ErrorBox error={error}/>{selected&&<div className="selection-bar"><span><CheckCircle2 size={17}/>{farmers.find(f=>f.id===selected)?.farm_name} selected</span><div><Link className="button primary" href={'/new-listing/'+selected}><Plus size={16}/>Create listing</Link></div></div>}{loading?<div className="loading">Loading farmer directoryÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>:filtered.length?<div className="table-wrap"><table className="admin-table"><thead><tr><th><span className="sr-only">Select</span></th><th>Farmer & ID</th><th>Contact</th><th>Location</th><th>Farm size</th><th>Verification</th><th>Growing history</th><th>Actions</th></tr></thead><tbody>{filtered.map(f=><tr key={f.id} className={f.id===selected?'selected-row':''}><td><input type="radio" name="farmer" checked={selected===f.id} onChange={()=>setSelected(f.id)} aria-label={'Select '+f.farm_name}/></td><td><strong>{f.farm_name}</strong><small>{f.id}</small></td><td>{f.name}<small>{f.phone}</small></td><td><strong>{f.location}</strong>{((f.country&&f.region)||f.locality)?<small>{[f.locality||f.ward,f.region||f.district,f.country].filter(Boolean).join(' Ãƒâ€šÃ‚Â· ')}</small>:null}</td><td>{number(f.farm_size)} acres</td><td><span className={'status '+(f.verification_status==='Verified'?'status-contacted':'')}>{f.verification_status}</span></td><td>{f.baseline_status==='complete'?<IconLabel><CheckCircle2 size={15}/>Complete</IconLabel>:f.baseline_status==='draft'?'Draft saved':'Not started'}</td><td><Link className="text-button" href={'/new-listing/'+f.id}>Create listing <ArrowRight size={15}/></Link></td></tr>)}</tbody></table></div>:<Empty title="No matching farmers">Try a different name, phone number, or farmer ID.</Empty>}<FinancialAnalytics/><VerificationAssignments/></>;}
 
-function SettingsPage({user,config,update,notify}:{user:User;config:Config;update:(u:User)=>void;notify:(s:string)=>void}){const [busy,setBusy]=useState(false),[error,setError]=useState('');async function consent(value:boolean){setBusy(true);try{await send('/account/consent',{sms_opt_in:value},'PATCH');update({...user,sms_opt_in:value});notify(value?'SMS consent recorded.':'SMS consent withdrawn.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}return <><div className="page-heading"><div><h1>Your account, your preferences.</h1><p>Manage how you stay connected to Wirefen.</p></div></div><div className="settings-layout"><section className="settings-section"><h2>Account details</h2><dl className="review-list"><div><dt>Name</dt><dd>{user.name}</dd></div>{user.email&&<div><dt>Email</dt><dd>{user.email}</dd></div>}<div><dt>Phone</dt><dd>{user.phone}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div></dl><p className="muted">Your phone number connects your account and future SMS interactions.</p></section>{user.role==='Farmer'&&<LocationSettings user={user} update={update}/>}<section className="settings-section"><h2>SMS updates</h2><p>Receive Wirefen updates and use supported SMS data entry. You can withdraw consent here or reply STOP at any time.</p><ErrorBox error={error}/><label className="checkbox-label"><input type="checkbox" checked={user.sms_opt_in} disabled={busy} onChange={e=>consent(e.target.checked)}/>I agree to receive Wirefen SMS messages.</label><p className="info-box">{config.sms_ready?'SMS provider credentials are configured.':'SMS delivery is not connected yet. Your preference is recorded for when the service is activated.'}</p></section></div></>;}
+function DeliveryAddressSettings({notify}:{notify:(s:string)=>void}){
+ const [addr,setAddr]=useState<DeliveryAddress|null>(readSavedDelivery);
+ const [name,setName]=useState(addr?.name||'');
+ const [phone,setPhone]=useState(addr?.phone||'');
+ const [email,setEmail]=useState(addr?.email||'');
+ const [delivery,setDelivery]=useState(addr?.delivery||'');
+ const [notes,setNotes]=useState(addr?.notes||'');
+ const [saved,setSaved]=useState(false);
+ function save(e:FormEvent<HTMLFormElement>){
+  e.preventDefault();
+  const normalized=normalizePhone(phone);
+  const d:DeliveryAddress={name,phone:normalized||phone,email,delivery,notes};
+  saveSavedDelivery(d);
+  setAddr(d);
+  setSaved(true);
+  setTimeout(()=>setSaved(false),3000);
+  notify('Delivery routing address saved. It will be used automatically on checkout.');
+ }
+ return <section className="settings-section">
+  <h2>Delivery address for routing</h2>
+  <p>Saved delivery location and contact details for checkout routing. You won't be asked to re-enter your address on every order.</p>
+  <form onSubmit={save}>
+   <label className="field"><span>Full name</span><input required value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mary Phiri"/></label>
+   <label className="field"><span>Phone number</span><input required type="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="e.g. 0881522474, 265 881522474, or +265..."/><small>Accepts 0881522474, 265 881522474 or +265 formats.</small></label>
+   <label className="field"><span>Email address</span><input required type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="e.g. mary@example.com"/></label>
+   <label className="field"><span>Delivery location (strictly for delivery routing)</span><input required minLength={3} maxLength={200} value={delivery} onChange={e=>setDelivery(e.target.value)} placeholder="e.g. Area 47, Sector 3, Lilongwe"/></label>
+   <label className="field"><span>Delivery notes (optional)</span><textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. Near the main gate"/></label>
+   <button className="primary">Save delivery address</button>
+   {saved&&<p role="status" style={{color:'var(--primary)',marginTop:8}}>Delivery address updated.</p>}
+  </form>
+ </section>;
+}
+
+function SettingsPage({user,config,update,notify}:{user:User;config:Config;update:(u:User)=>void;notify:(s:string)=>void}){const [busy,setBusy]=useState(false),[error,setError]=useState('');async function consent(value:boolean){setBusy(true);try{await send('/account/consent',{sms_opt_in:value},'PATCH');update({...user,sms_opt_in:value});notify(value?'SMS consent recorded.':'SMS consent withdrawn.');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}return <><div className="page-heading"><div><h1>Your account, your preferences.</h1><p>Manage how you stay connected to Wirefen.</p></div></div><div className="settings-layout"><section className="settings-section"><h2>Account details</h2><dl className="review-list"><div><dt>Name</dt><dd>{user.name}</dd></div>{user.email&&<div><dt>Email</dt><dd>{user.email}</dd></div>}<div><dt>Phone</dt><dd>{user.phone}</dd></div><div><dt>Role</dt><dd>{user.role}</dd></div></dl><p className="muted">Your phone number connects your account and future SMS interactions.</p></section><DeliveryAddressSettings notify={notify}/>{user.role==='Farmer'&&<LocationSettings user={user} update={update}/>}<section className="settings-section"><h2>SMS updates</h2><p>Receive Wirefen updates and use supported SMS data entry. You can withdraw consent here or reply STOP at any time.</p><ErrorBox error={error}/><label className="checkbox-label"><input type="checkbox" checked={user.sms_opt_in} disabled={busy} onChange={e=>consent(e.target.checked)}/>I agree to receive Wirefen SMS messages.</label><p className="info-box">{config.sms_ready?'SMS provider credentials are configured.':'SMS delivery is not connected yet. Your preference is recorded for when the service is activated.'}</p></section></div></>;}
 function Help({config,onOpenUssd}:{config:Config;onOpenUssd?:()=>void}){return <><div className="page-heading"><div><h1>Good connections start with clarity.</h1><p>A few things to know about growing with Wirefen in Malawi, Zambia, and regional markets.</p></div></div><div className="help-layout"><section><h2>From farm to marketplace</h2>{[['How do I buy produce and make direct payments?','Explore the marketplace, filter by crop, and open a listing. Submit an order inquiry; online payments are not currently available.'],['Can I pay directly with a Malawian bank account?','Online payments are not currently available. Confirmed guest orders are pay on delivery; coordinate collection and settlement details with the seller.'],['How do farmers without internet access Wirefen via USSD (*211#)?','Smallholder farmers across rural Malawi and Zambia can dial *211# on any basic 2G/feature phone without internet. The interactive USSD menu enables farmer registration, buyer registration, live market price checking in MWK/ZMW, and Form 1 operational cost tracking.'],['Can farmers register via regular SMS in parallel?','Yes! In parallel to the website and USSD, farmers can register via SMS by texting: JOIN FARMER <Name>, <Country>, <District>, <Locality> to Wirefen. Their account and farm profile are created immediately.'],['How do I list my harvest?','Create a farmer account. In My farm, choose List produce, enter availability, price and harvest details, then publish. Your listing appears in the public catalogue until its expiration date.'],['What is growing history (Form 0 & Form 1)?','Your historical baseline describes a typical season: primary crop, land planted, yield per acre, growing duration and Form 1 Guided Breakdown costs (fertilizer/seeds, labor, processing, transportation). Estimates are welcome and help establish a foundation for supply planning.'],['What happens when I lose connection?','After your first online visit, the installed app caches its shell and catalogue. Private growing history drafts stay in the open page and sync when connectivity returns. Keep the page open until saving completes; reloading or signing out clears unsynced estimates. Publishing listings and submitting orders require a connection.'],['How does admin assistance work?','Authorized staff use the farmer directory to select a Farmer ID and create produce listings on that farmerÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s behalf. Order inquiries and payments are managed in the admin request queue.']].map(([title,body])=><details className="faq" key={title}><summary>{title}<Plus size={17}/></summary><p>{body}</p></details>)}</section><aside className="help-note"><Sprout size={32}/><h2>Built for the way you grow.</h2><p>Start small. Save as you go. Return when youÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢re ready.</p><Link className="button primary" href="/marketplace">Explore the marketplace <ArrowRight size={16}/></Link>{onOpenUssd&&<button className="button secondary full-width" style={{marginTop:12}} onClick={onOpenUssd}><Smartphone size={16}/>Launch *211# Phone Simulator</button>}{config.demo&&<small>This workspace contains illustrative farms and listings. Malawian Kwacha (MWK), Zambian Kwacha (ZMW), ZAR, USD, and EUR are active currencies.</small>}</aside></div></>;}
