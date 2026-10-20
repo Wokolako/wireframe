@@ -121,8 +121,8 @@ All responses are JSON except the SMS webhook, which returns TwiML. Send JSON wi
 | POST | `/api/v1/paychangu/initialize` | Checkout ID bearer token; starts payment after household checkout reserves stock |
 | POST | `/api/v1/paychangu/webhook` | PayChangu; HMAC-signed webhook verified against the provider before settlement |
 | POST | `/api/v1/orders` | Buyer |
-| GET | `/api/v1/orders` | Buyer sees own; Admin sees all |
-| PATCH | `/api/v1/orders/:id` | Admin; status |
+| GET | `/api/v1/orders` | Buyer sees own; Farmer sees requests for own listings; Admin sees all |
+| PATCH | `/api/v1/orders/:id` | Farmer manages requests for own listings; Admin manages all |
 | POST | `/api/v1/webhooks/sms/receive` | Valid Twilio signature; URL-encoded payload |
 
 Example partial baseline:

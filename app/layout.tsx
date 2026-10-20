@@ -4,6 +4,7 @@ import '@fontsource/dm-sans/500.css';
 import '@fontsource/dm-sans/600.css';
 import '@fontsource/dm-sans/700.css';
 import '../src/styles.css';
+import {WirefenClient} from './wirefen-client';
 
 export const metadata:Metadata = {
   title:'Wirefen — Good things grow together',
@@ -14,5 +15,13 @@ export const metadata:Metadata = {
 };
 export const viewport:Viewport = {width:'device-width',initialScale:1,viewportFit:'cover',themeColor:'#234c36'};
 export default function RootLayout({children}:{children:React.ReactNode}) {
-  return <html lang="en"><body>{children}</body></html>;
+  return (
+    <html lang="en">
+      {/* Browser extensions such as Monica add body attributes before hydration. */}
+      <body suppressHydrationWarning>
+        <WirefenClient/>
+        {children}
+      </body>
+    </html>
+  );
 }

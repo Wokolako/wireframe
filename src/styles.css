@@ -191,3 +191,73 @@
 .ebay-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .ebay-modal-header h3{margin:0;font-size:18px;font-weight:700}
 
+/* Farmer-owned order request queue */
+.status-accepted, .status-approved{background:#e3f0dc;color:#315f27;font-weight:600}.status-declined, .status-denied{background:#fff0ec;color:#8a3029;font-weight:600}.request-approve{background:var(--forest, #2d6a4f) !important;color:#fff !important;border:none !important;font-weight:600}.request-approve:hover{opacity:0.92}.request-deny{color:var(--error, #c92a2a) !important;background:transparent !important;border:1px solid #ffc9c9 !important;font-weight:600}.request-deny:hover{background:#fff5f5 !important}.farmer-requests{margin-top:36px}.farmer-requests.standalone{margin-top:0}.farmer-request-heading{align-items:flex-end}.farmer-request-heading>div p{font-size:12px;margin-top:5px}.farmer-requests td small svg{vertical-align:-2px}.request-actions{display:flex;align-items:center;gap:10px;margin-top:9px}.request-actions .compact{min-height:36px;padding:6px 10px}.request-decline{color:var(--error);min-height:36px}.farmer-requests .empty{padding:44px 24px}
+@media(max-width:700px){.farmer-request-heading{align-items:flex-start}.farmer-request-heading>div p{font-size:13px;line-height:1.6}.request-actions{align-items:flex-start;flex-direction:column;gap:3px}.farmer-requests .table-wrap table{min-width:820px}}
+
+/* Product card enhancements: full-card clickable & breathing room below add to basket */
+.produce-card{
+  cursor: pointer;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.produce-card:hover{
+  border-color: #849973;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(23, 59, 40, 0.09);
+}
+.produce-info{
+  padding: 16px 17px 20px !important;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.produce-info .add-basket-btn{
+  margin-top: 14px;
+  margin-bottom: 4px;
+}
+
+/* Marketplace tabs: All products vs My listings */
+.marketplace-tabs{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 24px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 2px;
+}
+.marketplace-tab{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px 8px 0 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -4px;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+.marketplace-tab:hover{
+  color: var(--text);
+  background: var(--selected);
+}
+.marketplace-tab.active{
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: transparent;
+}
+.marketplace-tab .tab-badge{
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #e2ebda;
+  color: var(--forest);
+}

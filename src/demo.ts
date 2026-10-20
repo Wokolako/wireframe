@@ -135,11 +135,11 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  }
  if(route.startsWith('/listings/')){const item=data.listings.find(l=>l.id===route.split('/')[2]&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified');if(!item)throw new Error('Sample listing not found.');return finish(publicListing(item));}
  if(route==='/orders'){
-  const u=account(method==='GET'?['Buyer','Admin']:['Buyer']);if(method==='GET')return finish(data.orders.filter(o=>u.role==='Admin'||o.buyer_id===u.id));
+  const u=account(method==='GET'?['Buyer','Farmer','Admin']:['Buyer']);if(method==='GET')return finish(data.orders.filter(o=>u.role==='Admin'||u.role==='Buyer'&&o.buyer_id===u.id||u.role==='Farmer'&&data.listings.find(l=>l.id===o.listing_id)?.farmer_id===u.farmer?.id));
   const item=data.listings.find(l=>l.id===body.listing_id);if(!item||item.available_volume==null||Number(body.volume)<=0||Number(body.volume)>item.available_volume)throw new Error('Enter a quantity within the available supply.');const id=crypto.randomUUID();
   data.orders.unshift({id,listing_id:item.id,title:item.title,volume:Number(body.volume),delivery_location:String(body.delivery_location),notes:String(body.notes||''),status:'New',created_at:now(),buyer_id:u.id,buyer_name:u.name,phone:u.phone});return finish({id,status:'New'});
  }
- if(route.startsWith('/orders/')&&method==='PATCH'){account(['Admin']);const order=data.orders.find(o=>o.id===route.split('/')[2]);if(!order)throw new Error('Sample request not found.');order.status=String(body.status);return finish({ok:true});}
+ if(route.startsWith('/orders/')&&method==='PATCH'){const u=account(['Farmer','Admin']),order=data.orders.find(o=>o.id===route.split('/')[2]);if(!order)throw new Error('Sample request not found.');const listing=data.listings.find(l=>l.id===order.listing_id);if(u.role==='Farmer'&&listing?.farmer_id!==u.farmer?.id)throw new Error('You can only manage requests for your own produce.');if(u.role==='Farmer'&&!['Accepted','Declined','Approved','Denied','Contacted','Closed'].includes(String(body.status)))throw new Error('Choose a seller response for this request.');order.status=String(body.status);return finish({ok:true,status:order.status});}
  if(route==='/payments'){
   const u=account(method==='GET'?['Buyer','Admin']:['Buyer','Admin']);
   if(method==='GET')return finish((data.payments||[]).filter(p=>u.role==='Admin'||p.buyer_id===u.id));

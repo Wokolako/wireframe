@@ -1,7 +1,7 @@
 import {navigate} from './navigation';
 import Link from 'next/link';
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {ArrowLeft,ArrowRight,ArrowUpRight,Bookmark,Building2,CheckCircle2,CreditCard,Info,Leaf,Lock,MapPin,Minus,Package,Plus,Search,ShieldCheck,Smartphone,Trash2,X} from 'lucide-react';
+import {ArrowLeft,ClipboardList,ArrowRight,ArrowUpRight,Bookmark,Building2,CheckCircle2,CreditCard,Info,Leaf,Lock,MapPin,Minus,Package,Plus,Search,ShieldCheck,Smartphone,Trash2,X,LayoutGrid,Tractor,Sprout} from 'lucide-react';
 import {api,send,date,number as formatNumber,type Config,type Listing,type User} from './api';
 
 type Props={listing:Listing;money:(n:number,currency?:string)=>string;saved:boolean;toggleSave:()=>void;notify?:(s:string)=>void};
@@ -23,24 +23,86 @@ function readBasket():BasketLine[]{try{const rows=JSON.parse(localStorage.getIte
 function saveBasket(rows:BasketLine[]){localStorage.setItem(basketKey,JSON.stringify(rows));window.dispatchEvent(new Event('wirefen-basket'));}
 function addToBasket(id:string,quantity:number){try{localStorage.removeItem(activeCheckoutKey);}catch{}const rows=readBasket(),current=rows.find(r=>r.listing_id===id);if(current)current.quantity+=quantity;else rows.push({listing_id:id,quantity});saveBasket(rows);}
 function useBasketCount(){const [count,setCount]=useState(()=>readBasket().length);useEffect(()=>{const refresh=()=>setCount(readBasket().length);window.addEventListener('wirefen-basket',refresh);return()=>window.removeEventListener('wirefen-basket',refresh);},[]);return count;}
-export function StorefrontCard({listing:l,money,saved,toggleSave,notify}:Props){const price=l.price_minor==null?l.price:l.price_minor/100;return <article className="produce-card"><div className="produce-image"><Link href={'/produce/'+l.id} tabIndex={-1} aria-hidden="true"><img src={l.image} alt="" loading="lazy"/></Link><span className="produce-category">{l.crop_category}</span><button className={'save-button '+(saved?'saved':'')} aria-label={(saved?'Unsave ':'Save ')+l.title} aria-pressed={saved} onClick={toggleSave}><Bookmark size={18} fill={saved?'currentColor':'none'}/></button></div><div className="produce-info"><h3><Link href={'/produce/'+l.id}>{l.title}</Link></h3><TrustBadges farmVerified={l.farm_verified===true} harvestInspected={l.harvest_inspected===true}/><p className="produce-facts"><span><Leaf size={14}/>{l.preservative_used?'Preserved':'No preservatives'}</span></p><div className="produce-bottom"><div className="price">{money(price,l.currency)}<span> / {l.sale_unit||'kg'}</span></div><Link className="view-produce" href={'/produce/'+l.id}>View produce <ArrowUpRight size={16}/></Link></div><button className="secondary full-width" onClick={()=>{if(l.guest_limit?.unit===(l.sale_unit||'kg')){addToBasket(l.id,1);notify?.(`Added 1 ${l.sale_unit||'kg'} of ${l.title} to your basket.`);}else navigate('/produce/'+l.id);}}>{l.guest_limit?.unit===(l.sale_unit||'kg')?`Add 1 ${l.sale_unit||'kg'} to basket`:'Request quantity'}</button></div></article>;}
+export function StorefrontCard({listing:l,money,saved,toggleSave,notify}:Props){
+  const price=l.price_minor==null?l.price:l.price_minor/100;
+  return <article className="produce-card" role="button" tabIndex={0} onClick={()=>navigate('/produce/'+l.id)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();navigate('/produce/'+l.id);}}}>
+    <div className="produce-image">
+      <Link href={'/produce/'+l.id} tabIndex={-1} aria-hidden="true" onClick={e=>e.stopPropagation()}>
+        <img src={l.image} alt="" loading="lazy"/>
+      </Link>
+      <span className="produce-category">{l.crop_category}</span>
+      <button className={'save-button '+(saved?'saved':'')} aria-label={(saved?'Unsave ':'Save ')+l.title} aria-pressed={saved} onClick={e=>{e.stopPropagation();toggleSave();}}>
+        <Bookmark size={18} fill={saved?'currentColor':'none'}/>
+      </button>
+    </div>
+    <div className="produce-info">
+      <h3><Link href={'/produce/'+l.id} onClick={e=>e.stopPropagation()}>{l.title}</Link></h3>
+      <TrustBadges farmVerified={l.farm_verified===true} harvestInspected={l.harvest_inspected===true}/>
+      <p className="produce-facts"><span><Leaf size={14}/>{l.preservative_used?'Preserved':'No preservatives'}</span></p>
+      <div className="produce-bottom">
+        <div className="price">{money(price,l.currency)}<span> / {l.sale_unit||'kg'}</span></div>
+        <Link className="view-produce" href={'/produce/'+l.id} onClick={e=>e.stopPropagation()}>View produce <ArrowUpRight size={16}/></Link>
+      </div>
+      <button className="secondary full-width add-basket-btn" onClick={e=>{
+        e.stopPropagation();
+        if(l.guest_limit?.unit===(l.sale_unit||'kg')){
+          addToBasket(l.id,1);
+          notify?.(`Added 1 ${l.sale_unit||'kg'} of ${l.title} to your basket.`);
+        }else navigate('/produce/'+l.id);
+      }}>
+        {l.guest_limit?.unit===(l.sale_unit||'kg')?`Add 1 ${l.sale_unit||'kg'} to basket`:'Request quantity'}
+      </button>
+    </div>
+  </article>;
+}
 function TrustBadges({farmVerified,harvestInspected}:{farmVerified:boolean;harvestInspected:boolean}){return <div className="storefront-badges">{farmVerified&&<span><ShieldCheck size={15}/>From a verified farm</span>}<span><Leaf size={15}/>Sustainability first</span>{harvestInspected&&<span><Leaf size={15}/>Harvest inspected</span>}</div>;}
 
 export function StorefrontMarketplace({savedOnly,saved,toggleSave,money,user,config,signIn,notify}:{savedOnly:boolean;saved:string[];toggleSave:(id:string)=>void;money:(n:number,currency?:string)=>string;user:User|null;config:Config;signIn:()=>void;notify?:(s:string)=>void}){
  const basketCount=useBasketCount();
+ const [marketTab,setMarketTab]=useState<'all'|'mine'>('all');
  const [listings,setListings]=useState<Listing[]>([]),[search,setSearch]=useState(''),[category,setCategory]=useState('All produce'),[sort,setSort]=useState('recent'),[loading,setLoading]=useState(true),[error,setError]=useState(''),[page,setPage]=useState(1),[pages,setPages]=useState(1),[total,setTotal]=useState(0);
- useEffect(()=>{let live=true;setLoading(true);const q=new URLSearchParams({page:String(page),page_size:'24'});if(search.trim())q.set('search',search.trim());if(category!=='All produce')q.set('category',category);api<Listing[]|{items:Listing[];pages:number;total:number}>('/listings?'+q).then(result=>{if(!live)return;const items=Array.isArray(result)?result:result.items;setListings(items);setPages(Array.isArray(result)?1:result.pages);setTotal(Array.isArray(result)?items.length:result.total);}).catch(e=>{if(live)setError(e.message);}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[search,category,page]);
+ useEffect(()=>{
+  let live=true;
+  setLoading(true);
+  setError('');
+  const q=new URLSearchParams({page:String(page),page_size:'24'});
+  if(marketTab==='mine')q.set('mine','true');
+  if(search.trim())q.set('search',search.trim());
+  if(category!=='All produce')q.set('category',category);
+  api<Listing[]|{items:Listing[];pages:number;total:number}>('/listings?'+q).then(result=>{
+    if(!live)return;
+    const items=Array.isArray(result)?result:result.items;
+    setListings(items);
+    setPages(Array.isArray(result)?1:result.pages);
+    setTotal(Array.isArray(result)?items.length:result.total);
+  }).catch(e=>{
+    if(live)setError(e.message);
+  }).finally(()=>{
+    if(live)setLoading(false);
+  });
+  return()=>{live=false;};
+ },[search,category,page,marketTab]);
  const shown=listings.filter(l=>!savedOnly||saved.includes(l.id)).sort((a,b)=>sort==='price'?a.price-b.price:sort==='harvest'?b.harvest_date.localeCompare(a.harvest_date):0);
  const changeCategory=(value:string)=>{setCategory(value);setPage(1);};
  const changeSearch=(value:string)=>{setSearch(value);setPage(1);};
+ const changeTab=(tab:'all'|'mine')=>{if(tab==='mine'&&!user){signIn();return;}setMarketTab(tab);setPage(1);};
  return <><div className="page-heading"><div><h1>{savedOnly?'Saved produce':'The marketplace'}</h1><p>Browse listings from farms with verified identities.</p></div><div className="storefront-actions"><Link className="button secondary" href="/basket">Basket ({basketCount})</Link>{user?.role==='Farmer'&&<Link className="button primary" href="/new-listing">List produce</Link>}</div></div>{!savedOnly&&<section className="market-hero"><div className="hero-copy"><h2>Good things<br/>grow together.</h2><p>Find quality produce for your household or place a larger request.</p><Link className="hero-link" href="#produce-catalog">Explore produce <ArrowRight size={17}/></Link></div><div className="hero-photo" role="img" aria-label="Green fields in warm afternoon sunlight"/></section>}
- <section id="produce-catalog"><div className="catalog-heading"><h2>Explore produce</h2><span>{config.market}</span></div><div className="catalog-toolbar"><label className="search-field"><Search size={18}/><span className="sr-only">Search produce</span><input value={search} onChange={e=>changeSearch(e.target.value)} placeholder="Search produce"/></label><label className="sort-field"><span className="sr-only">Category</span><select value={category} onChange={e=>changeCategory(e.target.value)}>{['All produce','Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts'].map(x=><option key={x}>{x}</option>)}</select></label><label className="sort-field"><span className="sr-only">Sort</span><select value={sort} onChange={e=>setSort(e.target.value)}><option value="recent">Recently listed</option><option value="price">Price: low to high</option><option value="harvest">Latest harvest</option></select></label></div><p className="results-bar" aria-live="polite">{loading?'Loading produce?':`${savedOnly?shown.length:total} available listings`}</p>{error&&<p role="alert" className="error-box">{error}</p>}{!loading&&(shown.length?<div className="produce-grid">{shown.map(l=><StorefrontCard key={l.id} listing={l} money={money} saved={saved.includes(l.id)} toggleSave={()=>toggleSave(l.id)} notify={notify}/>)}</div>:<p>No matching produce is available. Try another search.</p>)}{!savedOnly&&pages>1&&<nav className="pagination" aria-label="Marketplace pages"><button className="secondary" disabled={page<=1||loading} onClick={()=>setPage(value=>value-1)}>Previous</button><span>Page {page} of {pages}</span><button className="secondary" disabled={page>=pages||loading} onClick={()=>setPage(value=>value+1)}>Next</button></nav>}<div className="bottom-callout"><div><h3>Planning a larger order?</h3><p>Send your quantity and delivery dates to the Wirefen team.</p></div>{user?.role==='Buyer'?<Link href="/requests" className="button secondary">Bulk order request</Link>:<button className="secondary" onClick={signIn}>Sign in for bulk requests</button>}</div></section></>;
+ <section id="produce-catalog">
+ {!savedOnly&&<div className="marketplace-tabs" role="tablist" aria-label="Marketplace categories">
+   <button type="button" role="tab" aria-selected={marketTab==='all'} className={'marketplace-tab '+(marketTab==='all'?'active':'')} onClick={()=>changeTab('all')}>
+     <LayoutGrid size={16}/><span>All products</span>
+   </button>
+   <button type="button" role="tab" aria-selected={marketTab==='mine'} className={'marketplace-tab '+(marketTab==='mine'?'active':'')} onClick={()=>changeTab('mine')}>
+     <Tractor size={16}/><span>My listings</span>{user?.role==='Farmer'&&<span className="tab-badge">Farmer</span>}
+   </button>
+ </div>}
+ <div className="catalog-heading"><h2>{marketTab==='mine'?'My farm produce':'Explore produce'}</h2><span>{config.market}</span></div><div className="catalog-toolbar"><label className="search-field"><Search size={18}/><span className="sr-only">Search produce</span><input value={search} onChange={e=>changeSearch(e.target.value)} placeholder="Search produce"/></label><label className="sort-field"><span className="sr-only">Category</span><select value={category} onChange={e=>changeCategory(e.target.value)}>{['All produce','Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts'].map(x=><option key={x}>{x}</option>)}</select></label><label className="sort-field"><span className="sr-only">Sort</span><select value={sort} onChange={e=>setSort(e.target.value)}><option value="recent">Recently listed</option><option value="price">Price: low to high</option><option value="harvest">Latest harvest</option></select></label></div><p className="results-bar" aria-live="polite">{loading?'Loading produce…':`${savedOnly?shown.length:total} available listings`}</p>{error&&<p role="alert" className="error-box">{error}</p>}{!loading&&(shown.length?<div className="produce-grid">{shown.map(l=><StorefrontCard key={l.id} listing={l} money={money} saved={saved.includes(l.id)} toggleSave={()=>toggleSave(l.id)} notify={notify}/>)}</div>:marketTab==='mine'?<div className="empty" style={{padding:'50px 20px'}}><Sprout size={36} aria-hidden="true"/><h2>No produce listed yet</h2><p>You haven’t published any harvest listings yet. Share your crops with buyers across the marketplace.</p>{user?.role==='Farmer'?<Link className="button primary" href="/new-listing">List your produce <ArrowRight size={16}/></Link>:<button type="button" className="button primary" onClick={signIn}>Sign in to list produce</button>}</div>:<p>No matching produce is available. Try another search.</p>)}{!savedOnly&&pages>1&&<nav className="pagination" aria-label="Marketplace pages"><button className="secondary" disabled={page<=1||loading} onClick={()=>setPage(value=>value-1)}>Previous</button><span>Page {page} of {pages}</span><button className="secondary" disabled={page>=pages||loading} onClick={()=>setPage(value=>value+1)}>Next</button></nav>}<div className="bottom-callout"><div><h3>Planning a larger order?</h3><p>Send your quantity and delivery dates to the Wirefen team.</p></div>{user?.role==='Buyer'?<Link href="/requests" className="button secondary">Bulk order request</Link>:<button className="secondary" onClick={signIn}>Sign in for bulk requests</button>}</div></section></>;
 }
 
 type DetailProps={id:string;user:User|null;money:(n:number,currency?:string)=>string;saved:string[];toggleSave:(id:string)=>void;signIn:()=>void;notify:(s:string)=>void};
 export function StorefrontDetail({id,user,money:formatMoney,saved,toggleSave,signIn,notify}:DetailProps){
  const navigatingToPayment=useRef(false);
- const [item,setItem]=useState<Listing|null>(null),[quantity,setQuantity]=useState('1'),[error,setError]=useState(''),[bulkOpen,setBulkOpen]=useState(false);
+ const [item,setItem]=useState<Listing|null>(null),[quantity,setQuantity]=useState('1'),[error,setError]=useState(''),[bulkOpen,setBulkOpen]=useState(false),[orderModalOpen,setOrderModalOpen]=useState(false);
  useEffect(()=>{setItem(null);api<Listing>('/listings/'+id).then(setItem).catch(e=>setError(e.message));},[id]);
  const limit=item?.guest_limit,canGuest=!!limit&&limit.unit===(item?.sale_unit||'kg'),over=!!(limit&&Number(quantity)>limit.max);
  const q=Number(quantity);
@@ -58,8 +120,11 @@ export function StorefrontDetail({id,user,money:formatMoney,saved,toggleSave,sig
       <button type="button" className="secondary full-width" onClick={()=>{const q=Number(quantity);if(Number.isFinite(q)&&q>0){addToBasket(id,q);notify(`Added ${q} ${item.sale_unit||'kg'} to your basket.`);}}}>
         Add to basket
       </button>
+      <button type="button" className="secondary full-width" style={{marginTop:8,display:'flex',justifyContent:'center',alignItems:'center',gap:6}} onClick={()=>setOrderModalOpen(true)}>
+        <ClipboardList size={16}/> Request order from farmer
+      </button>
     </div>
-  )}{(!canGuest||over)&&<button className="primary full-width" onClick={()=>setBulkOpen(true)}>Use Order Request</button>}<small className="inquiry-note">Delivery location is collected strictly for delivery routing. Choose Airtel Money, TNM Mpamba, or Bank Transfer at checkout.</small></div></div></div>:!error&&<div className="loading">Loading produce…</div>}{bulkOpen&&<BulkModal item={item} user={user} signIn={signIn} close={()=>setBulkOpen(false)} notify={notify}/>}</>;
+  )}{(!canGuest||over)&&<button className="primary full-width" onClick={()=>setOrderModalOpen(true)}>Request order from farmer</button>}<small className="inquiry-note">Delivery location is collected strictly for delivery routing. Choose Airtel Money, TNM Mpamba, or Bank Transfer at checkout.</small></div></div></div>:!error&&<div className="loading">Loading produce…</div>}{orderModalOpen&&item&&<ListingOrderModal item={item} user={user} initialQuantity={Number(quantity)||1} signIn={signIn} close={()=>setOrderModalOpen(false)} notify={notify||(()=>{})}/>}{bulkOpen&&<BulkModal item={item} user={user} signIn={signIn} close={()=>setBulkOpen(false)} notify={notify}/>}</>;
 }
 
 export function StorefrontBasket({user,money,signIn,notify,config}:{user:User|null;money:(n:number)=>string;signIn:()=>void;notify:(s:string)=>void;config:Config}){
@@ -225,7 +290,21 @@ function PayChanguCheckout({checkoutId,enabled,notify,onReset}:{checkoutId:strin
 export function BulkModal({item,user,signIn,close,notify}:{item:Listing|null;user:User|null;signIn:()=>void;close:()=>void;notify:(s:string)=>void}){
  const dialog=useRef<HTMLDialogElement>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  useEffect(()=>{dialog.current?.showModal();return()=>dialog.current?.close();},[]);
- async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const d=new FormData(e.currentTarget);setBusy(true);setError('');try{await send('/bulk-orders',{frequency:d.get('frequency'),produce_type:d.get('produce'),target_quantity:Number(d.get('quantity')),quantity_unit:d.get('unit'),delivery_dates:d.get('dates'),target_price:Number(d.get('price')),contact_name:d.get('name'),contact_phone:d.get('phone'),contact_email:d.get('email'),notes:d.get('notes')});notify('Order Request submitted.');close();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const d=new FormData(e.currentTarget);setBusy(true);setError('');try{const qty=Number(d.get('quantity'));
+    const dates=String(d.get('dates')||'');
+    const notes=String(d.get('notes')||'');
+    if(item?.id&&user?.role==='Buyer'){
+      try{
+        await send('/orders',{
+          listing_id:item.id,
+          volume:qty,
+          delivery_location:readSavedDelivery()?.delivery||'Delivery location pending',
+          notes:notes?(`${dates?'Target dates: '+dates+'. ':''}${notes}`):(dates?'Target dates: '+dates:'Order request from catalogue')
+        });
+      }catch{}
+    }
+    await send('/bulk-orders',{frequency:d.get('frequency'),produce_type:d.get('produce'),target_quantity:qty,quantity_unit:d.get('unit'),delivery_dates:dates,target_price:Number(d.get('price')),contact_name:d.get('name'),contact_phone:d.get('phone'),contact_email:d.get('email'),notes:notes});
+    notify('Order Request submitted.');close();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  return <dialog ref={dialog} className="bulk-dialog" onCancel={close}><button className="dialog-close icon-button" aria-label="Close order request" onClick={close}><X size={20}/></button><h2>Order Request</h2><p style={{margin:'4px 0 16px',fontSize:'14px',color:'var(--muted)'}}>Standard checkout enforces household purchase limits based on official produce guidelines. For commercial or larger orders, please submit an Order Request.</p>{!user?<><p>Sign in or create an account to submit and manage an Order Request.</p><button className="primary" onClick={()=>{close();signIn();}}>Sign in or create account</button></>:user.role!=='Buyer'?<p>Use a buyer account to submit an Order Request.</p>:<form onSubmit={submit}><p>Tell us what you need. Wirefen will contact you to agree the order and delivery routing.</p>{error&&<p role="alert" className="error-box">{error}</p>}<label className="field"><span>Order frequency</span><select name="frequency" required><option value="one_time">One-time</option><option value="recurring">Recurring</option></select></label><label className="field"><span>Produce type</span><input name="produce" required defaultValue={item?.title||''}/></label><div className="form-grid"><label className="field"><span>Target quantity</span><input name="quantity" type="number" required min="0.1" step="0.1"/></label><label className="field"><span>Unit</span><select name="unit" defaultValue={item?.guest_limit?.unit||'tonnes'}>{['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes'].map(u=><option key={u}>{u}</option>)}</select></label></div><label className="field"><span>Target delivery dates</span><input name="dates" required placeholder="e.g. 20–25 November"/></label><label className="field"><span>Target price per unit</span><input name="price" type="number" required min="0.01" step="0.01"/></label><label className="field"><span>Contact name</span><input name="name" required defaultValue={user.name}/></label><label className="field"><span>Phone</span><input name="phone" type="tel" required defaultValue={user.phone}/></label><label className="field"><span>Email</span><input name="email" type="email" required defaultValue={user.email||''}/></label><label className="field"><span>Additional notes</span><textarea name="notes" maxLength={2000}/></label><button className="primary" disabled={busy}>{busy?'Sending…':'Submit Order Request'}</button></form>}</dialog>;
 }
 
@@ -257,4 +336,98 @@ export function AdminGuestOrders(){
    </tr>)}
   </tbody></table></div>:<p>No guest orders yet.</p>}
  </section>;
+}
+
+
+export function ListingOrderModal({item,user,initialQuantity=1,signIn,close,notify}:{item:Listing|null;user:User|null;initialQuantity?:number;signIn:()=>void;close:()=>void;notify:(s:string)=>void}){
+  if(!item)return null;
+  const dialog=useRef<HTMLDialogElement>(null);
+  const [quantity,setQuantity]=useState(initialQuantity>0?String(initialQuantity):'1');
+  const [location,setLocation]=useState(()=>readSavedDelivery()?.delivery||'');
+  const [notes,setNotes]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+
+  useEffect(()=>{dialog.current?.showModal();return()=>dialog.current?.close();},[]);
+
+  const q=Number(quantity);
+  const unitPrice=item.price_minor!=null?item.price_minor/100:item.price;
+  const total=Number.isFinite(q)&&q>0?q*unitPrice:0;
+
+  async function submit(e:FormEvent<HTMLFormElement>){
+    e.preventDefault();
+    if(!item)return;
+    if(!user){close();signIn();return;}
+    if(user.role!=='Buyer'){setError('Sign in with a Buyer account to send an order request to the farmer.');return;}
+    if(!Number.isFinite(q)||q<=0){setError('Enter a valid quantity.');return;}
+    if(!location.trim()||location.trim().length<3){setError('Please enter a delivery location (at least 3 characters).');return;}
+    setBusy(true);setError('');
+    try{
+      await send('/orders',{
+        listing_id:item.id,
+        volume:q,
+        delivery_location:location.trim(),
+        notes:notes.trim()
+      });
+      notify(`Order request for ${item.title} submitted to ${item.farm_name||'farmer'}!`);
+      close();
+      navigate('/requests');
+    }catch(err){
+      setError((err as Error).message);
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  return (
+    <dialog ref={dialog} className="bulk-dialog" onCancel={close}>
+      <button className="dialog-close icon-button" aria-label="Close order request" onClick={close}><X size={20}/></button>
+      <h2>Order Request from Farmer</h2>
+      <p style={{margin:'4px 0 16px',fontSize:'14px',color:'var(--muted)'}}>
+        Send a direct order request to <strong>{item.farm_name||'the grower'}</strong> for fresh {item.title}. The farmer will review and approve or deny your request.
+      </p>
+      {!user?(
+        <div style={{padding:'12px 0'}}>
+          <p style={{marginBottom:14}}>Sign in or create a buyer account to submit an order request directly to the farmer.</p>
+          <button className="primary" onClick={()=>{close();signIn();}}>Sign in or create account</button>
+        </div>
+      ):user.role!=='Buyer'?(
+        <div className="error-box">You are currently signed in as a {user.role}. Please sign in with a Buyer account to send an order request.</div>
+      ):(
+        <form onSubmit={submit}>
+          {error&&<p role="alert" className="error-box">{error}</p>}
+          <div style={{background:'var(--surface-sunken)',padding:'12px 16px',borderRadius:'8px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <strong>{item.title}</strong>
+              <small style={{display:'block',color:'var(--muted)'}}>{item.farm_name} · {item.location}</small>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <strong style={{color:'var(--forest, #2d6a4f)'}}>{item.currency||'MWK'} {formatNumber(unitPrice)}</strong>
+              <small style={{display:'block',color:'var(--muted)'}}>per {item.sale_unit||'kg'}</small>
+            </div>
+          </div>
+          <label className="field">
+            <span>Requested quantity ({item.sale_unit||'kg'})</span>
+            <input type="number" required min={item.sale_unit==='kg'?'0.1':'1'} max={item.available_volume||100000} step={item.sale_unit==='kg'?'0.1':'1'} value={quantity} onChange={e=>setQuantity(e.target.value)}/>
+            {item.available_volume!=null&&<small>Available supply: {formatNumber(item.available_volume)} {item.sale_unit||'kg'}</small>}
+          </label>
+          <label className="field">
+            <span>Delivery location (strictly for delivery routing)</span>
+            <input required minLength={3} maxLength={200} value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Area 47, Sector 3, Lilongwe"/>
+          </label>
+          <label className="field">
+            <span>Notes or preferred delivery dates (optional)</span>
+            <textarea maxLength={1000} value={notes} onChange={e=>setNotes(e.target.value)} placeholder="e.g. Preferred delivery date or collection arrangement"/>
+          </label>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 0',borderTop:'1px solid var(--border)',marginTop:'8px'}}>
+            <span style={{fontSize:'13px',color:'var(--muted)'}}>Estimated total:</span>
+            <strong style={{fontSize:'16px',color:'var(--forest, #2d6a4f)'}}>{item.currency||'MWK'} {formatNumber(Math.round(total))}</strong>
+          </div>
+          <button className="primary full-width" disabled={busy} style={{marginTop:'12px',padding:'12px',display:'flex',justifyContent:'center',alignItems:'center',gap:'8px'}}>
+            <ClipboardList size={16}/>{busy?'Sending request…':'Send Order Request to Farmer'}
+          </button>
+        </form>
+      )}
+    </dialog>
+  );
 }

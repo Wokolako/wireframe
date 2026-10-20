@@ -24,7 +24,7 @@ export async function createClerkProfile(db,clerkUserId,input){
   await tx.run('INSERT INTO users (id,name,phone,password_hash,role,sms_opt_in,sms_opt_in_at,created_at) VALUES (?,?,?,?,?,?,?,?)',[id,v.name,v.phone,hashPassword(randomUUID()),v.role,+v.sms_opt_in,v.sms_opt_in?stamp:null,stamp]);
   if(v.role==='Farmer'){
    const g=normalizeGeography(v);
-   await tx.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,country_code,region,district,locality,ward,region_key,location_key,location) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',[randomUUID(),id,v.farm_name,g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location]);
+   await tx.run('INSERT INTO farmer_profiles (id,user_id,farm_name,country,country_code,region,district,locality,ward,region_key,location_key,location,verification_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',[randomUUID(),id,v.farm_name,g.country,g.country_code,g.region,g.district,g.locality,g.ward,g.region_key,g.location_key,g.location,'Verified']);
   }
   await tx.run('INSERT INTO sms_consents VALUES (?,?,?,?,?)',[randomUUID(),id,+v.sms_opt_in,stamp,'clerk-onboarding']);
   await tx.run('INSERT INTO clerk_identities VALUES (?,?)',[clerkUserId,id]);

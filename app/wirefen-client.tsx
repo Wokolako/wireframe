@@ -16,6 +16,12 @@ export function WirefenClient() {
     if(location.hash.startsWith('#/') && !location.hash.startsWith('#//'))router.replace(location.hash.slice(1));
     if(process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
+    } else if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(registrations => {
+        for (const registration of registrations) {
+          registration.unregister();
+        }
+      }).catch(() => {});
     }
   },[router]);
   return <AuthRoot/>;

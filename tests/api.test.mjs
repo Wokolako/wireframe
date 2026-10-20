@@ -102,7 +102,22 @@ test('public listing text cannot expose a supplier name or origin',async()=>{
  assert.equal((await call('/listings?search=Mokoena')).data.items.length,0);
  assert.equal((await call('/listings',{cookie:farmer,method:'POST',body:{...body,title:'Cabbage',sale_unit:'cobs'}})).status,400);
 });
-test('buyer inquiry is persisted and admin can progress its status',async()=>{const cookie=await demo('Buyer');const body={listing_id:'produce-1',volume:100,delivery_location:'Johannesburg',notes:'Collection preferred'};assert.equal((await call('/orders',{cookie,body:{...body,volume:100000}})).status,400);const create=await call('/orders',{cookie,body});assert.equal(create.status,201);assert.equal((await call('/orders/'+create.data.id,{cookie,method:'PATCH',body:{status:'Closed'}})).status,403);const admin=await demo('Admin');assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,200);assert.equal((await call('/orders',{cookie})).data[0].status,'Contacted');});
+test('buyer inquiry reaches the listing farmer while admin retains oversight',async()=>{
+ const buyer=await demo('Buyer'),farmer=await demo('Farmer');
+ const body={listing_id:'produce-1',volume:100,delivery_location:'Johannesburg',notes:'Collection preferred'};
+ assert.equal((await call('/orders',{cookie:buyer,body:{...body,volume:100000}})).status,400);
+ const create=await call('/orders',{cookie:buyer,body});assert.equal(create.status,201);
+ assert.equal((await call('/orders/'+create.data.id,{cookie:buyer,method:'PATCH',body:{status:'Closed'}})).status,403);
+ const farmerQueue=await call('/orders',{cookie:farmer});assert.equal(farmerQueue.status,200);assert.ok(farmerQueue.data.some(order=>order.id===create.data.id&&order.buyer_name==='Alex Morgan'));
+ assert.equal((await call('/orders/'+create.data.id,{cookie:farmer,method:'PATCH',body:{status:'Accepted'}})).status,200);
+ assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Accepted');
+ const other=await call('/orders',{cookie:buyer,body:{...body,listing_id:'produce-2',volume:25}});assert.equal(other.status,201);
+ assert.ok(!(await call('/orders',{cookie:farmer})).data.some(order=>order.id===other.data.id));
+ assert.equal((await call('/orders/'+other.data.id,{cookie:farmer,method:'PATCH',body:{status:'Accepted'}})).status,403);
+ const admin=await demo('Admin');assert.ok((await call('/orders',{cookie:admin})).data.some(order=>order.id===other.data.id));
+ assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,200);
+ assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Contacted');
+});
 test('cross-origin writes and revoked sessions are rejected',async()=>{const cookie=await demo('Buyer');assert.equal((await call('/account/consent',{cookie,method:'PATCH',body:{sms_opt_in:true},headers:{Origin:'https://attacker.example'}})).status,403);await call('/auth/logout',{cookie,body:{}});assert.equal((await call('/orders',{cookie})).status,401);});
 test('checkout idempotency replays the original header and rejects key reuse with a new payload',async()=>{
  const body={listing_id:'produce-1',quantity:.25,contact_name:'Retry Buyer',contact_phone:'+265991112260',contact_email:'retry@example.com',delivery_location:'Lilongwe city'};
