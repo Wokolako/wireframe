@@ -1,5 +1,5 @@
 import {migrateAppendices} from './appendix-migration.mjs';
-import {migrateBusinessSchema,migrateGuestLimitIdentity,migratePayChanguCheckout} from './business-migration.mjs';
+import {migrateBusinessSchema,migrateGuestLimitIdentity,migratePayChanguCheckout,migrateCommittedOrders} from './business-migration.mjs';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {Pool as NeonPool,neonConfig} from '@neondatabase/serverless';
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS pwa_visitors (id TEXT PRIMARY KEY, first_seen_at TEXT
 CREATE TABLE IF NOT EXISTS pwa_accounts (user_id TEXT PRIMARY KEY REFERENCES users(id), prompted_at TEXT, dismissed_at TEXT, installed_at TEXT);
 CREATE TABLE IF NOT EXISTS farmer_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id), farm_name TEXT NOT NULL, country TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '', district TEXT, locality TEXT NOT NULL DEFAULT '', ward TEXT, location TEXT NOT NULL DEFAULT '', farm_size REAL NOT NULL DEFAULT 0 CHECK(farm_size >= 0), verification_status TEXT NOT NULL DEFAULT 'Unverified');
 CREATE TABLE IF NOT EXISTS historical_baselines (farmer_id TEXT PRIMARY KEY REFERENCES farmer_profiles(id), crop_type TEXT, avg_land_size REAL, avg_yield_per_acre REAL, avg_duration_days INTEGER, status TEXT NOT NULL DEFAULT 'draft', updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, farmer_id TEXT NOT NULL REFERENCES farmer_profiles(id), produce_id TEXT, title TEXT NOT NULL, crop_category TEXT NOT NULL, available_volume REAL NOT NULL CHECK(available_volume >= 0), sale_unit TEXT NOT NULL DEFAULT 'kg', price REAL NOT NULL CHECK(price > 0), price_minor INTEGER, currency TEXT, harvest_date TEXT NOT NULL, expiration_date TEXT NOT NULL, shelf_life_days INTEGER NOT NULL CHECK(shelf_life_days > 0), preservative_used INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '', image TEXT NOT NULL, traceability TEXT NOT NULL DEFAULT '', agent_score REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'published', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, farmer_id TEXT NOT NULL REFERENCES farmer_profiles(id), produce_id TEXT, title TEXT NOT NULL, crop_category TEXT NOT NULL, available_volume REAL NOT NULL CHECK(available_volume >= 0), sale_unit TEXT NOT NULL DEFAULT 'kg', price REAL NOT NULL CHECK(price > 0), price_minor INTEGER, currency TEXT, harvest_date TEXT NOT NULL, expiration_date TEXT NOT NULL, shelf_life_days INTEGER NOT NULL CHECK(shelf_life_days > 0), preservative_used INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL DEFAULT '', image TEXT NOT NULL, images TEXT, traceability TEXT NOT NULL DEFAULT '', agent_score REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'published', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS order_requests (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL REFERENCES listings(id), buyer_id TEXT NOT NULL REFERENCES users(id), volume REAL NOT NULL CHECK(volume > 0), delivery_location TEXT NOT NULL, notes TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sms_consents (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), opted_in INTEGER NOT NULL, recorded_at TEXT NOT NULL, source TEXT NOT NULL);
@@ -87,12 +87,23 @@ export async function migrateDb(){
     await migratePayChanguCheckout(db,!!pool);
     await db.run("INSERT INTO schema_migrations (version,name,applied_at) VALUES (6,'paychangu-checkout-fields',?)",[new Date().toISOString()]);
   }
+  if(!await applied(7)){
+    try{
+      if(pool)await db.exec('ALTER TABLE listings ADD COLUMN IF NOT EXISTS images TEXT');
+      else{try{await db.exec('ALTER TABLE listings ADD COLUMN images TEXT');}catch{}}
+    }catch{}
+    await db.run("INSERT INTO schema_migrations (version,name,applied_at) VALUES (7,'listing-images-column',?)",[new Date().toISOString()]);
+  }
+  if(!await applied(8)){
+    await migrateCommittedOrders(db,!!pool);
+    await db.run("INSERT INTO schema_migrations (version,name,applied_at) VALUES (8,'buyer-commitment-and-approved-request-checkout',?)",[new Date().toISOString()]);
+  }
 }
 
 export async function assertDbSchema(){
   try{
     const migration=await db.get('SELECT MAX(version) AS version FROM schema_migrations');
-    if(Number(migration?.version)<6)throw new Error('database migrations are incomplete');
+    if(Number(migration?.version)<8)throw new Error('database migrations are incomplete');
     await db.all('SELECT produce_id FROM guest_order_limits LIMIT 0');
   }catch(error){
     throw new Error('Wirefen database schema is not ready. Run `npm run db:migrate` before starting the application.',{cause:error});

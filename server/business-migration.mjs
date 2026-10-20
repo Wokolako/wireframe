@@ -5,6 +5,12 @@ const columns=async(db,table,postgres)=>postgres
   : db.all(`PRAGMA table_info(${table})`);
 const add=async(db,table,name,type,postgres)=>{if(!(await columns(db,table,postgres)).some(column=>column.name===name))await db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);};
 
+export async function migrateCommittedOrders(db,postgres){
+ for(const [name,type] of [['committed_at','TEXT'],['committed_unit_price_minor','BIGINT'],['committed_currency','TEXT'],['committed_sale_unit','TEXT'],['approved_at','TEXT'],['checkout_id','TEXT']])await add(db,'order_requests',name,type,postgres);
+ await add(db,'guest_order_checkouts','order_request_id','TEXT',postgres);
+ await db.exec('CREATE INDEX IF NOT EXISTS checkout_order_request_idx ON guest_order_checkouts(order_request_id)');
+}
+
 async function allowZeroInventory(db,postgres){
   if(postgres){
     await db.exec('ALTER TABLE listings DROP CONSTRAINT IF EXISTS listings_available_volume_check; ALTER TABLE listings ADD CONSTRAINT listings_available_volume_check CHECK(available_volume >= 0);');

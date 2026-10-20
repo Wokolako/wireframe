@@ -23,7 +23,7 @@ export function ProducePriceReferences() {
     <p role="status">{rows.length} of {prices.items.length} produce items</p>
     {rows.length ? <div className="table-wrap" tabIndex={0} role="region" aria-label="Produce price reference table">
       <table>
-        <caption>Source: {prices.source} · supplied screenshots</caption>
+        <caption>Produce price references</caption>
         <thead><tr><th scope="col">Produce</th><th scope="col">Unit</th><th scope="col">UK price (GBP)</th><th scope="col">Malawi price (MWK)</th></tr></thead>
         <tbody>{rows.map(item => <tr key={item.source_row}>
           <th scope="row">{item.name}</th>

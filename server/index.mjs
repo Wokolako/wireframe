@@ -20,6 +20,8 @@ import { seed, hashPassword } from './seed.mjs';
 import { getExchangeRates } from './exchange.mjs';
 import {minorUnits,majorUnits,lineTotalMinor,quantityMillis} from './money.mjs';
 import {audit} from './audit.mjs';
+import {makeCheckoutQuote,verifyCheckoutQuote,frozenPaymentAmount} from './checkout.mjs';
+import {registerOrderRequests,settleApprovedRequest} from './order-requests.mjs';
 import {produceById,legacyProduce,limitForProduce,categories,produceIdsMatching} from '../shared/catalogue.mjs';
 
 await assertDbSchema();
@@ -38,21 +40,12 @@ export async function convertToMWK(amount, fromCurrency='USD'){
  const from=String(fromCurrency||'USD').toUpperCase();
  const num=Number(amount);
  if(!Number.isFinite(num)||num<=0)return {amountMWK:0,rate:1,fromCurrency:from};
- if(from==='MWK')return {amountMWK:Math.round(num),rate:1,fromCurrency:'MWK'};
- try{
-  const exchange=await getExchangeRates(from==='EUR'?'USD':from);
-  const rates=exchange?.rates;
-  if(rates&&rates[from]&&rates['MWK']){
-   const rate=rates['MWK']/rates[from];
-   const amountMWK=Math.max(1,Math.round(num*rate));
-   return {amountMWK,rate,fromCurrency:from};
-  }
- }catch(e){}
- const fallbackPerEUR={EUR:1,USD:1.1231,MWK:1945.5,ZAR:18.4793,ZMW:22.455,GBP:0.84458};
- const fromRate=fallbackPerEUR[from]||fallbackPerEUR.USD;
- const rate=fallbackPerEUR.MWK/fromRate;
- const amountMWK=Math.max(1,Math.round(num*rate));
- return {amountMWK,rate,fromCurrency:from};
+ if(from==='MWK')return {amountMWK:num,rate:1,fromCurrency:'MWK'};
+ const exchange=await getExchangeRates(from);
+ const rates=exchange?.rates;
+ if(!rates?.[from]||!rates.MWK)throw Object.assign(new Error('A current exchange rate to MWK is unavailable. Please retry later.'),{status:503});
+ const rate=rates.MWK/rates[from];
+ return {amountMWK:Math.max(1,Math.round(num*rate)),rate,fromCurrency:from};
 }
 if(demo) await seed(db);
 export const app = express();
@@ -81,9 +74,9 @@ app.use('/api/v1/auth',authLimit);
 app.use(['/api/v1/auth/register','/api/v1/auth/login','/api/v1/auth/demo'],(req,res,next)=>clerkEnabled?next(fail(410,'Use Clerk to sign in or create your account.')):next());
 app.post('/api/v1/auth/onboard',async(req,res)=>{if(!clerkEnabled||!req.clerkUserId)throw fail(401,'Sign in with Clerk to continue.');const id=await createClerkProfile(db,req.clerkUserId,req.body);res.status(201).json(await publicUser(await db.get('SELECT * FROM users WHERE id=?',[id])));});
 async function session(res,u){const token=randomBytes(32).toString('hex');await db.run('INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,?)',[hash(token),u.id,new Date(Date.now()+604800000).toISOString()]); res.cookie('wirefen_session',token,{httpOnly:true,sameSite:'lax',secure:production,maxAge:604800000,path:'/'});return publicUser(u);}
-const phone=z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+[1-9]\d{7,14}$/,'Enter a valid phone number (e.g. 0881522474, 265 881522474, or +265881522474).'));
+const phone=z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+[1-9]\d{7,14}$/,'Enter a valid phone number with country code (e.g. +265992661956, +260971234567, or +27821234567).'));
 app.get('/api/v1/exchange-rates',rateLimit({windowMs:60000,limit:60,standardHeaders:'draft-8',legacyHeaders:false}),async(req,res)=>res.json(await getExchangeRates(process.env.CURRENCY || 'ZAR')));
-app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'South Africa (sample market)',currency:process.env.CURRENCY || 'ZAR',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL),capabilities:{guest_checkout:true,online_payments:false,paychangu_mobile_money:payChanguEnabled(),ussd:!!process.env.USSD_WEBHOOK_SECRET,sms:!!(process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}}));
+app.get('/api/v1/config',(req,res)=>res.json({demo,auth_provider:clerkEnabled?'clerk':'local',clerk_publishable_key:clerkEnabled?clerkKey:null,market:process.env.MARKET_NAME || 'South Africa (sample market)',currency:process.env.CURRENCY || 'ZAR',sms_ready:!!(process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL),bank_transfer:null,capabilities:{guest_checkout:payChanguEnabled(),online_payments:payChanguEnabled(),pay_on_delivery:false,bank_transfer:false,paychangu_mobile_money:payChanguEnabled(),ussd:!!process.env.USSD_WEBHOOK_SECRET,sms:!!(process.env.TWILIO_ACCOUNT_SID&&process.env.TWILIO_AUTH_TOKEN&&process.env.TWILIO_PHONE_NUMBER&&process.env.TWILIO_WEBHOOK_URL)}}));
 app.post('/api/v1/auth/register',async(req,res)=>{
  const v=z.object({name:z.string().trim().min(2).max(100),phone,password:z.string().min(10).max(128),role:z.enum(['Farmer','Buyer']),sms_opt_in:z.boolean(),farm_name:z.string().trim().max(100).optional(),country:z.string().trim().max(100).optional(),region:z.string().trim().max(100).optional(),district:z.string().trim().max(100).optional(),locality:z.string().trim().max(100).optional(),ward:z.string().trim().max(100).optional(),location:z.string().trim().max(100).optional()}).parse(req.body);
  let geography;if(v.role==='Farmer'){try{geography=normalizeGeography(v);}catch(e){throw fail(400,e.message);}}
@@ -116,11 +109,12 @@ financialRoutes(app,db,permit);verificationRoutes(app,db,permit);
 app.get('/api/v1/farmers/:id/listing-draft',permit('Farmer','Admin'),async(req,res)=>{await ownFarm(req,req.params.id);const row=await db.get('SELECT payload FROM listing_drafts WHERE farmer_id=?',[req.params.id]);res.json(row?JSON.parse(row.payload):{});});
 app.patch('/api/v1/farmers/:id/listing-draft',permit('Farmer','Admin'),async(req,res)=>{await ownFarm(req,req.params.id);const schema=z.object({produce_id:z.string().max(50).optional(),title:z.string().max(100).optional(),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']).optional(),available_volume:z.string().max(20).optional(),price:z.string().max(20).optional(),harvest_date:z.string().max(10).optional(),expiration_date:z.string().max(10).optional(),shelf_life_days:z.string().max(10).optional(),preservative_used:z.enum(['true','false']).optional(),description:z.string().max(2000).optional()});const patch=schema.parse(req.body);const old=await db.get('SELECT payload FROM listing_drafts WHERE farmer_id=?',[req.params.id]);const value={...(old?JSON.parse(old.payload):{}),...patch};await db.run('INSERT INTO listing_drafts VALUES (?,?,?) ON CONFLICT(farmer_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[req.params.id,JSON.stringify(value),now()]);res.json(value);});
 const date=z.iso.date();
-const listing=z.object({farmer_id:z.string().min(1),produce_id:z.string().min(1),title:z.string().trim().min(3).max(100),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']),available_volume:z.number().positive().max(1e9),sale_unit:z.enum(['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes']),price:z.number().positive().max(1e9),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR','GBP']).default('MWK'),harvest_date:date,expiration_date:date,shelf_life_days:z.number().int().positive().max(3650),preservative_used:z.boolean(),description:z.string().trim().max(2000).default(''),traceability:z.string().trim().max(100).default(''),image:z.string().max(3000000).optional()}).refine(v=>v.expiration_date>=v.harvest_date,{message:'Expiry must be on or after harvest.',path:['expiration_date']}).refine(v=>{const produce=produceById(v.produce_id);return !!produce&&produce.unit===v.sale_unit&&produce.category===v.crop_category;},{message:'Select a produce type with the matching category and sale unit.',path:['produce_id']});
+const listing=z.object({farmer_id:z.string().min(1),produce_id:z.string().min(1),title:z.string().trim().min(3).max(100),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']),available_volume:z.number().positive().max(1e9),sale_unit:z.enum(['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes']),price:z.number().positive().max(1e9),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR','GBP']).default('MWK'),harvest_date:date,expiration_date:date,shelf_life_days:z.number().int().positive().max(3650),preservative_used:z.boolean(),description:z.string().trim().max(2000).default(''),traceability:z.string().trim().max(100).default(''),image:z.string().max(10000000).optional(),images:z.array(z.string().max(10000000)).optional()}).refine(v=>v.expiration_date>=v.harvest_date,{message:'Expiry must be on or after harvest.',path:['expiration_date']}).refine(v=>{const produce=produceById(v.produce_id);return !!produce&&produce.unit===v.sale_unit&&produce.category===v.crop_category;},{message:'Select a produce type with the matching category and sale unit.',path:['produce_id']});
 const joinListing="SELECT l.*,f.farm_name,f.location,f.country,f.country_code,f.region,f.locality,f.verification_status,v.score AS agent_score,v.status AS agent_verification_status,v.updated_at AS verified_at FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id LEFT JOIN listing_verifications v ON v.listing_id=l.id";
+const parseImages=l=>{if(l.images){try{const arr=JSON.parse(l.images);if(Array.isArray(arr)&&arr.length)return arr;}catch(e){}}return l.image?[l.image]:[];};
 const storefrontListing=l=>({id:l.id,produce_id:l.produce_id,title:produceById(l.produce_id)?.name||l.crop_category,crop_category:l.crop_category,price:Number(l.price_minor??minorUnits(l.price))/100,currency:l.currency||process.env.CURRENCY||'ZAR',price_minor:Number(l.price_minor??minorUnits(l.price)),sale_unit:l.sale_unit||'kg',
  harvest_date:l.harvest_date,expiration_date:l.expiration_date,shelf_life_days:l.shelf_life_days,
- preservative_used:l.preservative_used,description:`Verified ${l.crop_category.toLowerCase()} available through Wirefen.`,image:l.image,
+ preservative_used:l.preservative_used,description:`Verified ${l.crop_category.toLowerCase()} available through Wirefen.`,image:l.image,images:parseImages(l),
  farm_verified:l.verification_status==='Verified',
  harvest_inspected:l.agent_verification_status==='verified'&&Number(l.agent_score)===100,
  sustainability_certification:null,agent_score:l.agent_score,agent_verification_status:l.agent_verification_status||'pending',traceability:l.traceability||null,
@@ -139,7 +133,7 @@ app.get('/api/v1/listings',async(req,res)=>{
  const q=z.object({category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']).optional(),produce_id:z.string().optional(),min_volume:z.coerce.number().nonnegative().optional(),max_volume:z.coerce.number().nonnegative().optional(),harvest_date_after:date.optional(),preservative:z.enum(['true','false']).optional(),search:z.string().max(100).optional(),mine:z.enum(['true']).optional(),page:z.coerce.number().int().positive().max(100000).default(1),page_size:z.coerce.number().int().positive().max(100).default(24)}).parse(req.query);
  if(q.min_volume!=null&&q.max_volume!=null&&q.min_volume>q.max_volume)throw fail(400,'Minimum volume must not exceed maximum volume.');
  let where=` WHERE ${availabilityWhere('l')}`,params=[now().slice(0,10)];
- if(q.mine){if(!req.user)throw fail(401,'Sign in to view your listings.');where=' WHERE f.user_id=?';params=[req.user.id];}
+ if(q.mine){if(!req.user)throw fail(401,'Sign in to view your listings.');where=' WHERE (f.user_id=?'+(req.user.role==='Admin'?' OR 1=1':'')+')';params=[req.user.id];}
  else where+=" AND f.verification_status='Verified'";
  if(!q.mine&&(q.min_volume!==undefined||q.max_volume!==undefined))throw fail(400,'Stock filters are available to staff only.');
  for(const [key,op,val] of [['crop_category','=',q.category],['available_volume','>=',q.min_volume],['available_volume','<=',q.max_volume],['harvest_date','>',q.harvest_date_after],['preservative_used','=',q.preservative===undefined?undefined:+(q.preservative==='true')]]) if(val!==undefined){where+=` AND l.${key}${op}?`;params.push(val);}
@@ -152,7 +146,11 @@ app.get('/api/v1/listings',async(req,res)=>{
  if(q.search&&q.mine){where+=' AND LOWER(l.title) LIKE ?';params.push(`%${q.search.toLowerCase()}%`);}
  const count=await db.get('SELECT COUNT(*) AS count FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id'+where,params);
  const rows=await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT ? OFFSET ?', [...params,q.page_size,(q.page-1)*q.page_size]);
- const data=rows.map(storefrontListing);
+ const data=rows.map(row=>{
+  const base=storefrontListing(row);
+  if(q.mine){return {...base,title:row.title||base.title,available_volume:Number(row.available_volume),description:row.description||base.description};}
+  return base;
+ });
  res.json({items:data,page:q.page,page_size:q.page_size,total:Number(count.count),pages:Math.ceil(Number(count.count)/q.page_size)});
 });
 app.get('/api/v1/listings/:id',async(req,res)=>{const row=await db.get(joinListing+` WHERE l.id=? AND ${availabilityWhere('l')}`,[req.params.id,now().slice(0,10)]);if(!row)throw fail(404,'Listing is expired or no longer available.');res.json(storefrontListing(row));});
@@ -165,7 +163,28 @@ app.get('/api/v1/admin/listings',permit('Admin'),async(req,res)=>{
  const rows=await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT 500',params);
  res.json({listing_count:Number(totals.listing_count),total_available_kg:Number(totals.total_available_kg),stock_by_unit:stock_by_unit.map(row=>({...row,available:Number(row.available),listing_count:Number(row.listing_count)})),listings:rows});
 });
-app.post('/api/v1/listings',permit('Farmer','Admin'),async(req,res)=>{const v=listing.parse(req.body);const farm=await ownFarm(req,v.farmer_id);if(!hasGeography(farm))throw fail(409,'Complete the farmer location in Settings before publishing.');if(v.expiration_date<now().slice(0,10))throw fail(400,'Expiration date must not be in the past.');const id=randomUUID(),catalogueItem=produceById(v.produce_id),priceMinor=minorUnits(v.price);const defaultImg={Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans','Beverages & Nuts':'beans'}[v.crop_category];const image=v.image&&(v.image.startsWith('data:image/')||v.image.startsWith('/images/')||v.image.startsWith('http://')||v.image.startsWith('https://'))?v.image:`/images/${defaultImg}.jpg`;await db.run('INSERT INTO listings (id,farmer_id,produce_id,title,crop_category,available_volume,sale_unit,price,price_minor,currency,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,traceability,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',[id,v.farmer_id,catalogueItem.id,v.title,v.crop_category,v.available_volume,v.sale_unit,majorUnits(priceMinor),priceMinor,v.currency,v.harvest_date,v.expiration_date,v.shelf_life_days,+v.preservative_used,v.description,image,v.traceability,now()]);await db.run('DELETE FROM listing_drafts WHERE farmer_id=?',[v.farmer_id]);res.status(201).json({id});});
+app.post('/api/v1/listings',permit('Farmer','Admin'),async(req,res)=>{
+ const v=listing.parse(req.body);
+ const farm=await ownFarm(req,v.farmer_id);
+ if(!hasGeography(farm))throw fail(409,'Complete the farmer location in Settings before publishing.');
+ if(v.expiration_date<now().slice(0,10))throw fail(400,'Expiration date must not be in the past.');
+ const id=randomUUID(),catalogueItem=produceById(v.produce_id),priceMinor=minorUnits(v.price);
+ let imagesList=[];
+ if(Array.isArray(v.images)&&v.images.length>0){
+  if(v.images.length<3)throw fail(400,'A minimum of 3 produce photos is required.');
+  imagesList=v.images.filter(img=>typeof img==='string'&&img.trim().length>0);
+  if(imagesList.length<3)throw fail(400,'A minimum of 3 produce photos is required.');
+ }else if(v.image&&(v.image.startsWith('data:image/')||v.image.startsWith('/images/')||v.image.startsWith('http://')||v.image.startsWith('https://'))){
+  imagesList=[v.image];
+ }
+ const defaultImg={Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans','Beverages & Nuts':'beans'}[v.crop_category];
+ const primaryImage=imagesList[0]||(v.image&&(v.image.startsWith('data:image/')||v.image.startsWith('/images/')||v.image.startsWith('http://')||v.image.startsWith('https://'))?v.image:`/images/${defaultImg}.jpg`);
+ const imagesJson=imagesList.length?JSON.stringify(imagesList):JSON.stringify([primaryImage]);
+ await db.run('INSERT INTO listings (id,farmer_id,produce_id,title,crop_category,available_volume,sale_unit,price,price_minor,currency,harvest_date,expiration_date,shelf_life_days,preservative_used,description,image,images,traceability,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+  [id,v.farmer_id,catalogueItem.id,v.title,v.crop_category,v.available_volume,v.sale_unit,majorUnits(priceMinor),priceMinor,v.currency,v.harvest_date,v.expiration_date,v.shelf_life_days,+v.preservative_used,v.description,primaryImage,imagesJson,v.traceability,now()]);
+ await db.run('DELETE FROM listing_drafts WHERE farmer_id=?',[v.farmer_id]);
+ res.status(201).json({id});
+});
 const checkoutLimit=rateLimit({windowMs:15*60*1000,limit:production?10:1000,standardHeaders:'draft-8',legacyHeaders:false});
 const paymentLimit=rateLimit({windowMs:60000,limit:production?20:1000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many payment requests. Please try again shortly.'}});
 let payChanguOperatorsCache;
@@ -193,19 +212,21 @@ async function settlePayChanguCheckout(checkout,verified,chargeId){
   const currency=String(details?.currency||'').toUpperCase(),normalizedCurrency=currency==='MK'?'MWK':currency;
   let parsedResponse={};
   try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
-  const expectedMWK = parsedResponse.mwk_total || (checkout.currency === 'MWK' ? majorUnits(checkout.total_minor) : (await convertToMWK(majorUnits(checkout.total_minor), checkout.currency)).amountMWK);
+  const expectedMWK=frozenPaymentAmount(checkout);
   const paidAmount=Number(details?.amount);
   if(String(details?.charge_id||'')!==chargeId||normalizedCurrency!=='MWK'||!Number.isFinite(paidAmount)||Math.abs(paidAmount-expectedMWK)>0.001)throw fail(409,'The verified payment does not match this checkout.');
   return db.transaction(async tx=>{
    const current=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[checkout.id]);
    if(!current)throw fail(404,'Checkout not found.');
    if(current.payment_status==='paid')return 'paid';
-   if(current.payment_status!=='pending'||current.provider_charge_id!==chargeId)return current.payment_status;
+   if(!['pending','cancelled'].includes(current.payment_status)||current.provider_charge_id!==chargeId)return current.payment_status;
    const reference=String(details.ref_id||details.reference||'').slice(0,200);
-   const result=await tx.run("UPDATE guest_order_checkouts SET payment_status='paid',provider_reference=? WHERE id=? AND payment_status='pending' AND provider_charge_id=?",[reference,current.id,chargeId]);
+   const result=await tx.run("UPDATE guest_order_checkouts SET payment_status='paid',status=CASE WHEN status='Cancelled' THEN status ELSE 'Confirmed' END,provider_reference=? WHERE id=? AND payment_status IN ('pending','cancelled') AND provider_charge_id=?",[reference,current.id,chargeId]);
    if(!(result.rowCount??result.changes))return (await tx.get('SELECT payment_status FROM guest_order_checkouts WHERE id=?',[current.id]))?.payment_status||'failed';
-   await tx.run("UPDATE guest_orders SET payment_status='paid',paid_at=? WHERE checkout_id=? AND payment_status='pending'",[now(),current.id]);
+   await tx.run("UPDATE guest_orders SET payment_status='paid',status=CASE WHEN status='Cancelled' THEN status ELSE 'Confirmed' END,paid_at=? WHERE checkout_id=? AND payment_status IN ('pending','cancelled')",[now(),current.id]);
+   await settleApprovedRequest(tx,current,expectedMWK,now());
    await audit(tx,{action:'payment.paychangu_settled',entity:'guest_checkout',id:current.id,details:{provider_reference:reference,currency:'MWK',amount:expectedMWK,original_currency:checkout.currency,original_amount:majorUnits(checkout.total_minor)}});
+   if(current.status==='Cancelled')await audit(tx,{action:'payment.refund_required',entity:'guest_checkout',id:current.id,details:{provider_reference:reference,currency:'MWK',amount:expectedMWK,reason:'Payment settled after buyer cancellation.'}});
    return 'paid';
   });
  }
@@ -226,7 +247,27 @@ async function settlePayChanguCheckout(checkout,verified,chargeId){
 app.get('/api/v1/paychangu/operators',paymentLimit,async(req,res)=>res.json({data:await payChanguOperators()}));
 const contact=z.object({contact_name:z.string().trim().min(2).max(100),contact_phone:phone,
  contact_email:z.email().max(200)});
-const checkoutSchema=contact.extend({payment_method:z.enum(['paychangu_mobile_money','malawian_bank','pay_on_delivery']).default('paychangu_mobile_money'),delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default('')});
+const checkoutSchema=contact.extend({payment_method:z.enum(['paychangu_mobile_money']).default('paychangu_mobile_money'),delivery_location:z.string().trim().min(3).max(200),notes:z.string().trim().max(1000).default(''),quote_token:z.string().max(20000).optional()});
+async function checkedCheckoutItems(tx,items,lock=false){
+ const checked=[];
+ for(const item of items.map((item,index)=>({...item,index})).sort((a,b)=>a.listing_id.localeCompare(b.listing_id))){
+  const row=await tx.get(`SELECT l.*,f.verification_status FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id WHERE l.id=? AND ${availabilityWhere('l')}`+(lock&&process.env.DATABASE_URL?' FOR UPDATE OF l':''),[item.listing_id,now().slice(0,10)]);
+  if(!row||row.verification_status!=='Verified')throw fail(404,'Produce is expired, sold out, or unavailable.');
+  requireValidQuantity(item.quantity,row.sale_unit||'kg');
+  const produce=produceById(row.produce_id),cap=limitForProduce(row.produce_id);
+  if(!produce||!cap||produce.unit!==(row.sale_unit||'kg'))throw fail(409,'This produce needs an account and a bulk order request.');
+  if(item.quantity>Number(row.available_volume))throw fail(409,`${row.title} is unavailable in the requested quantity.`);
+  const priceMinor=Number(row.price_minor??minorUnits(row.price));
+  checked.push({...item,produce,cap,currency:row.currency||process.env.CURRENCY||'ZAR',priceMinor,lineTotalMinor:lineTotalMinor(priceMinor,item.quantity,produce.unit)});
+ }
+ return checked;
+}
+const basketItemsSchema=z.array(z.object({listing_id:z.string().min(1),quantity:z.number().positive().max(1e6)}).strict()).min(1).max(25).refine(items=>new Set(items.map(item=>item.listing_id)).size===items.length,'Combine duplicate listings in your basket.');
+app.post('/api/v1/guest-orders/quote',paymentLimit,async(req,res)=>{
+ const input=z.object({items:basketItemsSchema,payment_method:z.enum(['paychangu_mobile_money'])}).strict().parse(req.body);
+ if(input.payment_method==='paychangu_mobile_money'&&!payChanguEnabled())throw fail(503,'PayChangu checkout is not currently available.');
+ res.json(await makeCheckoutQuote(await checkedCheckoutItems(db,input.items),input.payment_method));
+});
 async function createGuestCheckout(req,res,v,items,aggregate){
  const key=req.get('Idempotency-Key');
  if(!key||!/^[A-Za-z0-9._:-]{16,128}$/.test(key))throw fail(400,'A valid Idempotency-Key is required for checkout.');
@@ -239,32 +280,16 @@ async function createGuestCheckout(req,res,v,items,aggregate){
    return JSON.parse(existing.response_json);
   }
   if(process.env.DATABASE_URL)for(const identity of [v.contact_phone,v.contact_email.toLowerCase()].sort())await tx.get('SELECT pg_advisory_xact_lock(hashtext(?))',['guest:'+identity]);
-  const checked=[];
-  for(let index=0;index<items.length;index++){
-   const item=items[index];requireValidQuantity(item.quantity,item.unit||'kg');
-   const row=await tx.get(`SELECT l.*,f.verification_status FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id WHERE l.id=? AND ${availabilityWhere('l')}`+(process.env.DATABASE_URL?' FOR UPDATE OF l':''),[item.listing_id,now().slice(0,10)]);
-   if(!row||row.verification_status!=='Verified')throw fail(404,'Produce is expired, sold out, or unavailable.');
-   const produce=produceById(row.produce_id),cap=limitForProduce(row.produce_id);
-   if(!produce||!cap||produce.unit!==(row.sale_unit||'kg'))throw fail(409,'This produce needs an account and a bulk order request.');
-   if(item.quantity>row.available_volume)throw fail(409,`${row.title} is unavailable in the requested quantity.`);
-   const priceMinor=Number(row.price_minor??minorUnits(row.price));
-   checked.push({...item,index,produce,cap,currency:row.currency||process.env.CURRENCY||'ZAR',priceMinor,lineTotalMinor:lineTotalMinor(priceMinor,item.quantity,produce.unit)});
-  }
-  const recent=await tx.all("SELECT g.quantity,g.produce_id FROM guest_orders g WHERE g.created_at>=? AND (g.contact_phone=? OR LOWER(g.contact_email)=LOWER(?)) AND g.status!='Cancelled'",[new Date(Date.now()-86400000).toISOString(),v.contact_phone,v.contact_email]);
+  const checked=await checkedCheckoutItems(tx,items,true);
+  const recent=await tx.all("SELECT g.quantity,g.produce_id FROM guest_orders g WHERE g.created_at>=? AND (g.contact_phone=? OR LOWER(g.contact_email)=LOWER(?)) AND g.status!='Cancelled' AND NOT EXISTS (SELECT 1 FROM guest_order_checkouts c WHERE c.id=g.checkout_id AND c.order_request_id IS NOT NULL)",[new Date(Date.now()-86400000).toISOString(),v.contact_phone,v.contact_email]);
   const totals=new Map();
   for(const row of recent)totals.set(row.produce_id,(totals.get(row.produce_id)||0)+Number(row.quantity));
   for(const item of checked){const next=(totals.get(item.produce.id)||0)+item.quantity;if(next>item.cap.max)throw fail(409,`${item.produce.name} has a household limit of ${item.cap.max} ${item.produce.unit} across orders in 24 hours. Sign in for a bulk request.`);totals.set(item.produce.id,next);}
-  const currency=checked[0].currency||process.env.CURRENCY||'ZAR';
-  if(checked.some(item=>item.currency&&item.currency!==currency))throw fail(409,'All items in a checkout must use the same currency.');
   if(v.payment_method==='paychangu_mobile_money'&&!payChanguEnabled())throw fail(503,'PayChangu checkout is not currently available.');
-  const totalMinor=checked.reduce((sum,item)=>sum+item.lineTotalMinor,0);
-  const orderTotal=majorUnits(totalMinor);
-  if(v.payment_method==='paychangu_mobile_money'&&currency==='MWK'&&totalMinor%100!==0)throw fail(400,'PayChangu accepts whole-Kwacha checkout totals. Adjust the basket quantity.');
-  const mwkConversion = await convertToMWK(orderTotal, currency);
-  const mwkTotal = mwkConversion.amountMWK;
-  const mwkTotalMinor = mwkTotal * 100;
-  const response={id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'Confirmed',payment_method:v.payment_method,payment_status:'unpaid',total_minor:totalMinor,total:orderTotal,currency,mwk_total:mwkTotal,mwk_total_minor:mwkTotalMinor,exchange_rate_to_mwk:mwkConversion.rate,message:v.payment_method==='malawian_bank'?'Order placed. Complete your transfer using your Malawian bank account.':'Order placed. Complete your payment in-app via PayChangu.'};
-  const inserted=await tx.run(`INSERT INTO guest_order_checkouts (id,idempotency_key,request_fingerprint,response_json,contact_name,contact_phone,contact_email,delivery_location,notes,payment_method,currency,total_minor,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,[checkoutId,key,fingerprint,JSON.stringify(response),v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,v.payment_method,currency,totalMinor,'Confirmed',createdAt]);
+  const quote=v.quote_token?verifyCheckoutQuote(v.quote_token,checked,v.payment_method):await makeCheckoutQuote(checked,v.payment_method);
+  const {currency,total_minor:totalMinor}=quote;
+  const response={...quote,id:aggregate?checkoutId:ids[0],checkout_id:checkoutId,ids,status:'Awaiting payment',payment_status:'unpaid',total:majorUnits(totalMinor),payment_quote_expires_at:quote.payable_currency!==currency?quote.quote_expires_at:null,message:'Complete online payment to confirm your order.'};
+  const inserted=await tx.run(`INSERT INTO guest_order_checkouts (id,idempotency_key,request_fingerprint,response_json,contact_name,contact_phone,contact_email,delivery_location,notes,payment_method,currency,total_minor,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(idempotency_key) DO NOTHING`,[checkoutId,key,fingerprint,JSON.stringify(response),v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,v.payment_method,currency,totalMinor,'Awaiting payment',createdAt]);
   if(!(inserted.rowCount??inserted.changes)){
    const conflict=await tx.get('SELECT request_fingerprint,response_json FROM guest_order_checkouts WHERE idempotency_key=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[key]);
    if(conflict.request_fingerprint!==fingerprint)throw fail(409,'This Idempotency-Key was already used for a different checkout.');
@@ -274,7 +299,7 @@ async function createGuestCheckout(req,res,v,items,aggregate){
    const reserved=await tx.run(`UPDATE listings SET available_volume=available_volume-? WHERE id=? AND available_volume>=? AND ${availabilityWhere('listings')}`,[item.quantity,item.listing_id,item.quantity,createdAt.slice(0,10)]);
    if(!(reserved.rowCount??reserved.changes))throw fail(409,`${item.produce.name} is unavailable in the requested quantity.`);
    await tx.run("INSERT INTO guest_orders (id,checkout_id,listing_id,produce_id,quantity,quantity_unit,payment_method,unit_price,unit_price_minor,line_total_minor,currency,contact_name,contact_phone,contact_email,delivery_location,notes,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    [ids[item.index],checkoutId,item.listing_id,item.produce.id,item.quantity,item.produce.unit,v.payment_method,majorUnits(item.priceMinor),item.priceMinor,item.lineTotalMinor,currency,v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,'Confirmed',createdAt]);
+    [ids[item.index],checkoutId,item.listing_id,item.produce.id,item.quantity,item.produce.unit,v.payment_method,majorUnits(item.priceMinor),item.priceMinor,item.lineTotalMinor,item.currency,v.contact_name,v.contact_phone,v.contact_email,v.delivery_location,v.notes,'Awaiting payment',createdAt]);
    await audit(tx,{actor:req.user?.id||null,action:'inventory.reserved',entity:'listing',id:item.listing_id,details:{quantity:item.quantity,unit:item.produce.unit,checkout_id:checkoutId}});
   }
   return response;
@@ -296,29 +321,42 @@ app.post('/api/v1/guest-orders/basket',checkoutLimit,async(req,res)=>{
 });
 app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
  if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured.');
- const input=z.object({checkout_id:z.string().uuid(),operator_ref_id:z.string().min(1).max(100),mobile:z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+265\d{9}$/,'Enter a valid Malawi mobile number, such as 0881522474, 265 881522474, or +265991234567.'))}).strict().parse(req.body);
+ const input=z.object({checkout_id:z.string().uuid(),operator_ref_id:z.string().min(1).max(100),mobile:z.string().transform(v=>normalizePhone(v)).pipe(z.string().regex(/^\+265\d{9}$/,'Enter a valid Malawi mobile number, such as +265992661956, +265881522474, or 0881522474.')),retry:z.boolean().optional()}).strict().parse(req.body);
  const operators=await payChanguOperators();
  if(!operators.some(operator=>String(operator.ref_id)===input.operator_ref_id))throw fail(400,'Choose a supported PayChangu mobile-money operator.');
+ // A manual retry checks the existing attempt; it must never replace a live charge.
+ if(input.retry){
+  const previous=await db.get('SELECT * FROM guest_order_checkouts WHERE id=?',[input.checkout_id]);
+  if(previous?.payment_status==='pending'&&previous.status!=='Cancelled'&&previous.provider_charge_id){
+   const verified=await verifyPayChanguCharge(previous.provider_charge_id);
+   await settlePayChanguCheckout(previous,verified,previous.provider_charge_id);
+  }
+ }
  const checkout=await db.transaction(async tx=>{
   const row=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[input.checkout_id]);
   if(!row)throw fail(404,'Checkout not found.');
   if(row.payment_method!=='paychangu_mobile_money')throw fail(409,'This checkout was not placed for PayChangu mobile-money payment.');
-  if(row.status!=='Confirmed')throw fail(409,'Wirefen must confirm stock availability before mobile-money payment can start.');
+  if(row.status==='Cancelled'||row.payment_status==='cancelled')throw fail(409,'This order has been cancelled and cannot be paid.');
+  if(!['Awaiting payment','Confirmed'].includes(row.status))throw fail(409,'This checkout is not available for payment.');
   if(row.payment_status==='paid')return {...row,alreadyPaid:true};
   if(row.payment_status==='pending'){
    if(!row.provider_charge_id)throw fail(409,'Payment is still being prepared. Check its status before trying again.');
    return {...row,existingAttempt:true};
   }
+  if(row.payment_status==='failed'&&!input.retry)throw fail(409,'The previous payment failed. Press Pay again to send a new phone request.');
+  let quote={};try{quote=JSON.parse(row.response_json||'{}');}catch{}
+  if(quote.payment_quote_expires_at&&Date.parse(quote.payment_quote_expires_at)<=Date.now())throw fail(409,'Your payment quote expired. Cancel this unpaid order and confirm a fresh checkout.');
+  frozenPaymentAmount(row);
   const chargeId=`WF${randomUUID().replaceAll('-','').slice(0,24)}`;
   await tx.run("UPDATE guest_order_checkouts SET payment_status='pending',provider_charge_id=?,provider_reference=NULL WHERE id=?",[chargeId,row.id]);
   await tx.run("UPDATE guest_orders SET payment_status='pending' WHERE checkout_id=? AND payment_status!='paid'",[row.id]);
   return {...row,payment_status:'pending',provider_charge_id:chargeId};
  });
  if(checkout.alreadyPaid)return res.json({checkout_id:checkout.id,status:'paid',message:'This checkout has already been paid.'});
- if(checkout.existingAttempt)return res.json({checkout_id:checkout.id,charge_id:checkout.provider_charge_id,status:'pending',message:'A mobile-money request is already in progress. Check its status before retrying.'});
+ if(checkout.existingAttempt)return res.json({checkout_id:checkout.id,charge_id:checkout.provider_charge_id,status:'pending',existing_attempt:true,message:'Your previous phone request is still pending. No new prompt was sent. Approve it or wait for it to expire before paying again.'});
  let parsedResponse={};
  try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
- const mwkAmount=parsedResponse.mwk_total||(checkout.currency==='MWK'?majorUnits(checkout.total_minor):(await convertToMWK(majorUnits(checkout.total_minor),checkout.currency)).amountMWK);
+ const mwkAmount=frozenPaymentAmount(checkout);
  const [first_name='',...lastNames]=checkout.contact_name.trim().split(/\s+/),last_name=lastNames.join(' ');
  let response;
  try{
@@ -341,16 +379,50 @@ app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
  res.status(201).json({checkout_id:checkout.id,charge_id:chargeId,amount:mwkAmount,currency:'MWK',original_amount:majorUnits(checkout.total_minor),original_currency:checkout.currency,status:'pending',message:body.message||'Approve the mobile-money request on your phone.'});
 });
 app.get('/api/v1/guest-orders/:id/payment-status',paymentLimit,async(req,res)=>{
- let checkout=await db.get('SELECT id,status,payment_method,payment_status,currency,total_minor,provider_charge_id,response_json FROM guest_order_checkouts WHERE id=?',[req.params.id]);
+ let checkout=await db.get('SELECT id,status,payment_method,payment_status,currency,total_minor,provider_charge_id,response_json,order_request_id FROM guest_order_checkouts WHERE id=?',[req.params.id]);
+ let verificationError=null;
  if(!checkout)throw fail(404,'Checkout not found.');
- if(checkout.payment_status==='pending'&&checkout.provider_charge_id){
-  const verified=await verifyPayChanguCharge(checkout.provider_charge_id);
-  checkout.payment_status=await settlePayChanguCheckout(checkout,verified,checkout.provider_charge_id);
+ if(checkout.status!=='Cancelled'&&checkout.payment_status!=='cancelled'&&checkout.payment_status==='pending'&&checkout.provider_charge_id){
+  try{
+   const verified=await verifyPayChanguCharge(checkout.provider_charge_id);
+   await settlePayChanguCheckout(checkout,verified,checkout.provider_charge_id);
+   checkout=await db.get('SELECT * FROM guest_order_checkouts WHERE id=?',[req.params.id]);
+  }catch(e){verificationError='Payment verification is temporarily unavailable. No additional phone request has been sent. Retry order status.';}
  }
  let parsedResponse={};
  try{parsedResponse=JSON.parse(checkout.response_json||'{}');}catch(e){}
- const mwkTotal=parsedResponse.mwk_total||(checkout.currency==='MWK'?majorUnits(checkout.total_minor):(await convertToMWK(majorUnits(checkout.total_minor),checkout.currency)).amountMWK);
- res.json({checkout_id:checkout.id,status:checkout.status,payment_method:checkout.payment_method,payment_status:checkout.payment_status,currency:checkout.currency,total_minor:Number(checkout.total_minor),mwk_total:mwkTotal,exchange_rate:parsedResponse.exchange_rate_to_mwk||null});
+ const orderLines=await db.all('SELECT listing_id,quantity FROM guest_orders WHERE checkout_id=?',[checkout.id]);
+ res.json({checkout_id:checkout.id,order_request_id:checkout.order_request_id,status:checkout.status,payment_method:checkout.payment_method,payment_status:checkout.payment_status,verification_error:verificationError,currency:checkout.currency,total_minor:Number(checkout.total_minor),mwk_total:parsedResponse.mwk_total??(checkout.currency==='MWK'?majorUnits(Number(checkout.total_minor)):null),payable_currency:parsedResponse.payable_currency||checkout.currency,payable_minor:parsedResponse.payable_minor??Number(checkout.total_minor),exchange_rate:parsedResponse.exchange_rate_to_mwk??null,rate_dates:parsedResponse.rate_dates||{},rate_sources:parsedResponse.rate_sources||{},payment_quote_expires_at:parsedResponse.payment_quote_expires_at||null,bank_transfer:parsedResponse.bank_transfer||null,items:orderLines.map(line=>({listing_id:line.listing_id,quantity:Number(line.quantity)}))});
+});
+async function cancelGuestCheckout(id,actor=null){
+ return db.transaction(async tx=>{
+  const order=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[id]);
+  if(!order)throw fail(404,'Checkout not found.');
+  const lines=await tx.all('SELECT * FROM guest_orders WHERE checkout_id=? ORDER BY listing_id,id'+(process.env.DATABASE_URL?' FOR UPDATE':''),[id]);
+  const itemLines=lines.map(line=>({listing_id:line.listing_id,quantity:Number(line.quantity)}));
+  if(order.status==='Cancelled')return {checkout_id:id,status:'Cancelled',payment_status:order.payment_status,items:itemLines,order_request_id:order.order_request_id};
+  if(order.payment_status==='paid')throw fail(409,'Payment has been received. Contact Wirefen for a refund before cancelling.');
+  if(['Confirmed','Awaiting payment'].includes(order.status))for(const line of lines){
+   await tx.run('UPDATE listings SET available_volume=available_volume+? WHERE id=?',[line.quantity,line.listing_id]);
+   await audit(tx,{actor,action:'inventory.released',entity:'listing',id:line.listing_id,details:{checkout_id:id,quantity:Number(line.quantity),unit:line.quantity_unit}});
+  }
+  await tx.run("UPDATE guest_orders SET status='Cancelled',payment_status=CASE WHEN payment_status='paid' THEN 'paid' ELSE 'cancelled' END WHERE checkout_id=?",[id]);
+  await tx.run("UPDATE guest_order_checkouts SET status='Cancelled',payment_status=CASE WHEN payment_status='paid' THEN 'paid' ELSE 'cancelled' END WHERE id=?",[id]);
+  await audit(tx,{actor,action:'order.cancelled',entity:'guest_checkout',id,details:{from:order.status,item_count:lines.length}});
+  return {checkout_id:id,status:'Cancelled',payment_status:order.payment_status==='paid'?'paid':'cancelled',items:itemLines,order_request_id:order.order_request_id};
+ });
+}
+app.post('/api/v1/guest-orders/:id/cancel',paymentLimit,async(req,res)=>{
+ const id=z.string().uuid().parse(req.params.id);
+ const order=await db.get('SELECT * FROM guest_order_checkouts WHERE id=?',[id]);
+ if(!order)throw fail(404,'Checkout not found.');
+ if(order.payment_status==='pending'&&order.provider_charge_id){
+  try{
+   const verified=await verifyPayChanguCharge(order.provider_charge_id);
+   await settlePayChanguCheckout(order,verified,order.provider_charge_id);
+  }catch(e){/* provider check must not block buyer cancellation */}
+ }
+ res.json(await cancelGuestCheckout(id,req.user?.id||null));
 });
 app.post('/api/v1/paychangu/webhook',paymentLimit,async(req,res)=>{
  const secret=process.env.PAYCHANGU_WEBHOOK_SECRET,signature=(req.get('signature')||req.get('x-paychangu-signature')||'').replace(/^sha256=/i,'');
@@ -360,13 +432,13 @@ app.post('/api/v1/paychangu/webhook',paymentLimit,async(req,res)=>{
  if(received.length!==expected.length||!timingSafeEqual(received,expected))throw fail(401,'Invalid PayChangu webhook signature.');
  const event=req.body||{},payment=event.data||event.order||event,chargeId=String(payment.charge_id||'');
  if(!chargeId)return res.status(200).json({received:true});
- const checkout=await db.get('SELECT id,status,payment_method,payment_status,currency,total_minor,provider_charge_id FROM guest_order_checkouts WHERE provider_charge_id=?',[chargeId]);
+ const checkout=await db.get('SELECT * FROM guest_order_checkouts WHERE provider_charge_id=?',[chargeId]);
  if(!checkout)return res.status(200).json({received:true});
  const verified=await verifyPayChanguCharge(chargeId);
  await settlePayChanguCheckout(checkout,verified,chargeId);
  res.status(200).json({received:true});
 });
-app.post('/api/v1/bulk-orders',permit('Buyer'),async(req,res)=>{
+app.post('/api/v1/bulk-orders',permit('Buyer','Farmer','Admin'),async(req,res)=>{
  const v=contact.extend({frequency:z.enum(['one_time','recurring']),produce_type:z.string().trim().min(2).max(100),
   target_quantity:z.number().positive().max(1e9),quantity_unit:z.enum(['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes']),
   delivery_dates:z.string().trim().min(3).max(200),target_price:z.number().positive().max(1e12),notes:z.string().trim().max(2000).default('')}).strict().parse(req.body);
@@ -374,8 +446,8 @@ app.post('/api/v1/bulk-orders',permit('Buyer'),async(req,res)=>{
   [id,req.user.id,v.frequency,v.produce_type,v.target_quantity,v.quantity_unit,v.delivery_dates,v.target_price,v.contact_name,v.contact_phone,v.contact_email,v.notes,now()]);
  res.status(201).json({id,status:'New'});
 });
-app.get('/api/v1/bulk-orders',permit('Buyer','Admin'),async(req,res)=>res.json(await db.all('SELECT * FROM bulk_order_requests'+(req.user.role==='Buyer'?' WHERE buyer_id=?':'')+' ORDER BY created_at DESC',req.user.role==='Buyer'?[req.user.id]:[])));
-app.patch('/api/v1/bulk-orders/:id',permit('Buyer','Admin'),async(req,res)=>{
+app.get('/api/v1/bulk-orders',permit('Buyer','Farmer','Admin'),async(req,res)=>res.json(await db.all('SELECT * FROM bulk_order_requests'+(req.user.role==='Admin'?'':' WHERE buyer_id=?')+' ORDER BY created_at DESC',req.user.role==='Admin'?[]:[req.user.id])));
+app.patch('/api/v1/bulk-orders/:id',permit('Buyer','Farmer','Admin'),async(req,res)=>{
  const {status}=z.object({status:z.enum(['New','In review','Contacted','Closed','Cancelled'])}).strict().parse(req.body);
  const row=await db.get('SELECT buyer_id,status FROM bulk_order_requests WHERE id=?',[req.params.id]);
  if(!row)throw fail(404,'Bulk request not found.');
@@ -384,13 +456,13 @@ app.patch('/api/v1/bulk-orders/:id',permit('Buyer','Admin'),async(req,res)=>{
  await db.run('UPDATE bulk_order_requests SET status=? WHERE id=?',[status,req.params.id]);res.json({id:req.params.id,status});
 });
 app.get('/api/v1/admin/guest-orders',permit('Admin'),async(req,res)=>{
- const rows=await db.all('SELECT g.*,l.title,l.produce_id FROM guest_orders g JOIN listings l ON l.id=g.listing_id ORDER BY g.created_at DESC,g.id');
+ const rows=await db.all("SELECT g.*,l.title,l.produce_id,c.currency AS checkout_currency,c.total_minor AS checkout_total_minor FROM guest_orders g JOIN listings l ON l.id=g.listing_id JOIN guest_order_checkouts c ON c.id=g.checkout_id WHERE g.payment_status='paid' AND g.status IN ('Confirmed','Cancelled') ORDER BY g.created_at DESC,g.id");
  const checkouts=new Map();
  for(const row of rows){
   let order=checkouts.get(row.checkout_id);
-  if(!order){order={id:row.checkout_id,contact_name:row.contact_name,contact_phone:row.contact_phone,contact_email:row.contact_email,delivery_location:row.delivery_location,notes:row.notes,status:row.status,payment_status:row.payment_status,payment_method:row.payment_method,currency:row.currency,created_at:row.created_at,total_minor:0,items:[]};checkouts.set(row.checkout_id,order);}
+  if(!order){order={id:row.checkout_id,contact_name:row.contact_name,contact_phone:row.contact_phone,contact_email:row.contact_email,delivery_location:row.delivery_location,notes:row.notes,status:row.status,payment_status:row.payment_status,payment_method:row.payment_method,currency:row.checkout_currency,created_at:row.created_at,total_minor:Number(row.checkout_total_minor),refund_required:row.status==='Cancelled',items:[]};checkouts.set(row.checkout_id,order);}
   const unitPriceMinor=Number(row.unit_price_minor??minorUnits(row.unit_price||0)),lineTotal=Number(row.line_total_minor??lineTotalMinor(unitPriceMinor,Number(row.quantity),row.quantity_unit||'kg'));
-  order.total_minor+=lineTotal;order.items.push({id:row.id,listing_id:row.listing_id,produce_id:row.produce_id,title:row.title,quantity:Number(row.quantity),quantity_unit:row.quantity_unit,unit_price_minor:unitPriceMinor,line_total_minor:lineTotal});
+  order.items.push({id:row.id,listing_id:row.listing_id,produce_id:row.produce_id,title:row.title,quantity:Number(row.quantity),quantity_unit:row.quantity_unit,unit_price_minor:unitPriceMinor,line_total_minor:lineTotal,currency:row.currency});
  }
  res.json([...checkouts.values()].map(order=>({...order,total:majorUnits(order.total_minor)})));
 });
@@ -403,64 +475,42 @@ app.patch('/api/v1/admin/guest-orders/:id',permit('Admin'),async(req,res)=>{
    if(line)order=await tx.get('SELECT * FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[line.checkout_id]);
   }
   if(!order)throw fail(404,'Guest order not found.');
+  if(status==='Confirmed'&&order.payment_status!=='paid')throw fail(409,'Online payment must be verified before confirming an order.');
   if(order.status==='Cancelled'&&status!=='Cancelled')throw fail(409,'A cancelled order cannot be reopened.');
   if(order.status==='Confirmed'&&!['Confirmed','Cancelled'].includes(status))throw fail(409,'A confirmed order can only be cancelled.');
   if(status==='Cancelled'&&order.payment_status==='paid')throw fail(409,'A paid order needs a refund workflow before cancellation.');
-  if(status==='Cancelled'&&order.payment_status==='pending')throw fail(409,'A mobile-money payment is still pending. Verify its status before cancelling.');
   const lines=await tx.all('SELECT * FROM guest_orders WHERE checkout_id=? ORDER BY listing_id,id'+(process.env.DATABASE_URL?' FOR UPDATE':''),[order.id]);
-  if(status==='Confirmed'&&order.status!=='Confirmed'){
+  if(status==='Confirmed'&&!['Confirmed','Awaiting payment'].includes(order.status)){
    for(const line of lines){
     const update=await tx.run(`UPDATE listings SET available_volume=available_volume-? WHERE id=? AND available_volume>=? AND ${availabilityWhere('listings')}`,[line.quantity,line.listing_id,line.quantity,now().slice(0,10)]);
     if(!(update.rowCount??update.changes))throw fail(409,'There is not enough unexpired stock to confirm this checkout.');
     await audit(tx,{actor:req.user.id,action:'inventory.reserved',entity:'listing',id:line.listing_id,details:{quantity:Number(line.quantity),unit:line.quantity_unit,checkout_id:order.id}});
    }
   }
-  if(status==='Cancelled'&&order.status==='Confirmed'){
+  if(status==='Cancelled'&&['Confirmed','Awaiting payment'].includes(order.status)){
    for(const line of lines){
     await tx.run('UPDATE listings SET available_volume=available_volume+? WHERE id=?',[line.quantity,line.listing_id]);
     await audit(tx,{actor:req.user.id,action:'inventory.released',entity:'listing',id:line.listing_id,details:{quantity:Number(line.quantity),unit:line.quantity_unit,checkout_id:order.id}});
    }
   }
-  await tx.run('UPDATE guest_orders SET status=? WHERE checkout_id=?',[status,order.id]);
-  await tx.run('UPDATE guest_order_checkouts SET status=? WHERE id=?',[status,order.id]);
+  await tx.run("UPDATE guest_orders SET status=?,payment_status=CASE WHEN ?='Cancelled' AND payment_status!='paid' THEN 'cancelled' ELSE payment_status END WHERE checkout_id=?",[status,status,order.id]);
+  await tx.run("UPDATE guest_order_checkouts SET status=?,payment_status=CASE WHEN ?='Cancelled' AND payment_status!='paid' THEN 'cancelled' ELSE payment_status END WHERE id=?",[status,status,order.id]);
   await audit(tx,{actor:req.user.id,action:'order.status_changed',entity:'guest_checkout',id:order.id,details:{from:order.status,to:status,item_count:lines.length}});
  });
  res.json({id:req.params.id,status});
 });
 app.post('/api/v1/admin/guest-orders/:id/collect-payment',permit('Admin'),async(req,res)=>{
- const paid_at=now();
- await db.transaction(async tx=>{
-  let order=await tx.get('SELECT status,payment_method,payment_status,id AS checkout_id FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[req.params.id]);
-  if(!order){const line=await tx.get('SELECT checkout_id FROM guest_orders WHERE id=?',[req.params.id]);if(line)order=await tx.get('SELECT status,payment_method,payment_status,id AS checkout_id FROM guest_order_checkouts WHERE id=?'+(process.env.DATABASE_URL?' FOR UPDATE':''),[line.checkout_id]);}
-  if(!order)throw fail(404,'Guest order not found.');
-  if(order.status!=='Confirmed')throw fail(409,'Confirm the order before recording payment.');
-  if(order.payment_status==='paid')throw fail(409,'Payment has already been recorded.');
-  const result=await tx.run("UPDATE guest_orders SET payment_status='paid',paid_at=? WHERE checkout_id=? AND status='Confirmed' AND payment_status='unpaid'",[paid_at,order.checkout_id]);
-  if(!(result.rowCount??result.changes))throw fail(409,'The order changed before payment could be recorded.');
-  await tx.run("UPDATE guest_order_checkouts SET payment_status='paid' WHERE id=?",[order.checkout_id]);
-  await audit(tx,{actor:req.user.id,action:'payment.collected',entity:'guest_checkout',id:order.checkout_id,details:{method:order.payment_method,paid_at}});
- });
- res.json({id:req.params.id,payment_status:'paid',paid_at});
+ throw fail(409,'Orders require verified online payment. Manual payment collection cannot confirm an order.');
 });
-app.post('/api/v1/orders',permit('Buyer'),async(req,res)=>{const v=z.object({listing_id:z.string(),volume:z.number().positive(),delivery_location:z.string().trim().min(3).max(200),notes:z.string().max(1000).default('')}).parse(req.body);const l=await db.get(`SELECT * FROM listings WHERE id=? AND ${availabilityWhere('listings')}`,[v.listing_id,now().slice(0,10)]);if(!l)throw fail(404,'This listing is expired or no longer available.');requireValidQuantity(v.volume,l.sale_unit||'kg');if(v.volume>l.available_volume)throw fail(400,'Requested volume exceeds available supply.');const id=randomUUID();await db.run('INSERT INTO order_requests (id,listing_id,buyer_id,volume,delivery_location,notes,created_at) VALUES (?,?,?,?,?,?,?)',[id,v.listing_id,req.user.id,v.volume,v.delivery_location,v.notes,now()]);res.status(201).json({id,status:'New'});});
-app.get('/api/v1/orders',permit('Buyer','Farmer','Admin'),async(req,res)=>{
- const scope=req.user.role==='Buyer'?[' WHERE o.buyer_id=?',[req.user.id]]:req.user.role==='Farmer'?[' WHERE l.farmer_id IN (SELECT id FROM farmer_profiles WHERE user_id=?)',[req.user.id]]:['',[]];
- res.json(await db.all('SELECT o.*,l.title,l.sale_unit,l.price,l.currency AS listing_currency,l.image,f.farm_name,u.name AS buyer_name,u.phone FROM order_requests o JOIN listings l ON l.id=o.listing_id JOIN farmer_profiles f ON f.id=l.farmer_id JOIN users u ON u.id=o.buyer_id'+scope[0]+' ORDER BY o.created_at DESC',scope[1]));
-});
-app.patch('/api/v1/orders/:id',permit('Farmer','Admin'),async(req,res)=>{
- const {status}=z.object({status:z.enum(['New','In review','Accepted','Declined','Approved','Denied','Contacted','Closed'])}).parse(req.body);
- const order=await db.get('SELECT o.id,f.user_id AS farmer_user_id FROM order_requests o JOIN listings l ON l.id=o.listing_id JOIN farmer_profiles f ON f.id=l.farmer_id WHERE o.id=?',[req.params.id]);
- if(!order)throw fail(404,'Request not found.');
- if(req.user.role==='Farmer'&&order.farmer_user_id!==req.user.id)throw fail(403,'You can only manage requests for your own produce.');
- if(req.user.role==='Farmer'&&!['Accepted','Declined','Approved','Denied','Contacted','Closed'].includes(status))throw fail(403,'Choose a seller response for this request.');
- await db.run('UPDATE order_requests SET status=? WHERE id=?',[status,req.params.id]);res.json({ok:true,status});
-});
+
+registerOrderRequests({app,db,permit,availabilityWhere,requireValidQuantity,audit,now,payChanguEnabled,paymentLimit});
 app.post('/api/v1/payments',permit('Buyer','Admin'),async(req,res)=>{
  if(!demo)throw fail(501,'Online payment is unavailable until a payment provider is connected.');
  const v=z.object({order_id:z.string(),amount:z.number().positive().max(1e12),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR']),method:z.enum(['malawian_bank','airtel_money_mw','tnm_mpamba','zambian_momo','card']),provider:z.string().trim().max(100),bank_name:z.string().trim().max(100).optional(),account_or_phone:z.string().trim().min(3).max(50),notes:z.string().trim().max(500).optional()}).parse(req.body);
  const order=await db.get('SELECT * FROM order_requests WHERE id=?',[v.order_id]);
  if(!order)throw fail(404,'Order request not found.');
  if(req.user.role==='Buyer'&&order.buyer_id!==req.user.id)throw fail(403,'You can only pay for your own order requests.');
+ if(order.committed_at||order.checkout_id)throw fail(409,'Committed requests require verified online payment through approved-request checkout.');
  if(order.payment_status==='paid')throw fail(400,'This order has already been paid.');
  const paymentId=randomUUID(),stamp=now();
  const prefix=v.currency==='MWK'?'MWK':v.currency==='ZMW'?'ZMW':v.currency;

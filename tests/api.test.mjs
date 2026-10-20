@@ -22,7 +22,7 @@ test('spreadsheet limits govern guest checkout and private admin stock reporting
  const admin=await demo('Admin');const report=await call('/admin/listings?country_code=ZA&region=Capricorn%20District',{cookie:admin});
  assert.equal(report.status,200);assert.ok(report.data.listings.some(l=>l.farm_name==='Mokoena Family Farm'&&l.available_volume>0));
  assert.ok(report.data.total_available_kg>0);
- assert.equal((await call('/admin/guest-orders',{cookie:admin})).data.length,2);
+ assert.equal((await call('/admin/guest-orders',{cookie:admin})).data.length,0);
 });
 test('basket checkout enforces per-produce limits and reserves stock atomically',async()=>{
  const body={items:[{listing_id:'produce-1',quantity:1},{listing_id:'produce-2',quantity:2}],contact_name:'Basket Buyer',contact_phone:'+265991112250',contact_email:'basket@example.com',delivery_location:'Lilongwe city'};
@@ -34,11 +34,11 @@ test('basket checkout enforces per-produce limits and reserves stock atomically'
  assert.equal(placed.data.payment_method,'paychangu_mobile_money');
  const stored=await db.get('SELECT payment_method,payment_status,unit_price,currency FROM guest_orders WHERE id=?',[placed.data.ids[0]]);
  assert.equal(stored.payment_method,'paychangu_mobile_money');assert.equal(stored.payment_status,'unpaid');assert.ok(Number(stored.unit_price)>0);assert.ok(stored.currency);
- assert.equal(placed.data.status,'Confirmed');
+ assert.equal(placed.data.status,'Awaiting payment');
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
  assert.equal((await call('/guest-orders/basket',{body:{...body,items:[{listing_id:'produce-1',quantity:1.1},body.items[1]]}})).status,409);
  const stockAfter=Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume);
- assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+ assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,409);
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),before-1);
  assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-2'])).available_volume),stockAfter);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,200);
@@ -47,15 +47,18 @@ test('basket checkout enforces per-produce limits and reserves stock atomically'
  assert.equal(paidCheckout.status,201);
  const checkoutRow=await db.get('SELECT contact_phone FROM guest_order_checkouts WHERE id=?',[paidCheckout.data.checkout_id]);
  assert.equal(checkoutRow.contact_phone,'+265881522474');
- assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+ assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,409);
  assert.equal((await call('/admin/guest-orders/'+placed.data.checkout_id+'/collect-payment',{body:{}})).status,401);
- assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id+'/collect-payment',{cookie:admin,body:{}})).status,200);
+ assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id+'/collect-payment',{cookie:admin,body:{}})).status,409);
+ await db.run("UPDATE guest_order_checkouts SET payment_status='paid',status='Confirmed' WHERE id=?",[paidCheckout.data.checkout_id]);
+ await db.run("UPDATE guest_orders SET payment_status='paid',status='Confirmed' WHERE checkout_id=?",[paidCheckout.data.checkout_id]);
+ const fulfilled=(await call('/admin/guest-orders',{cookie:admin})).data;
+ assert.equal(fulfilled.length,1);assert.equal(fulfilled[0].id,paidCheckout.data.checkout_id);
  assert.equal((await db.get('SELECT payment_status FROM guest_orders WHERE id=?',[paidCheckout.data.ids[1]])).payment_status,'paid');
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id+'/collect-payment',{cookie:admin,body:{}})).status,409);
  assert.equal((await call('/admin/guest-orders/'+paidCheckout.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Cancelled'}})).status,409);
  const bankOrder=await call('/guest-orders/basket',{body:{...body,contact_name:'Bank Buyer',contact_phone:'0881522474',contact_email:'bankbuyer@example.com',payment_method:'malawian_bank'}});
- assert.equal(bankOrder.status,201);
- assert.equal(bankOrder.data.payment_method,'malawian_bank');
+ assert.equal(bankOrder.status,400);
 });
 test('guest checkout uses count units from the spreadsheet for verified produce',async()=>{
  const avocado=(await call('/listings/produce-3')).data;
@@ -109,14 +112,17 @@ test('buyer inquiry reaches the listing farmer while admin retains oversight',as
  const create=await call('/orders',{cookie:buyer,body});assert.equal(create.status,201);
  assert.equal((await call('/orders/'+create.data.id,{cookie:buyer,method:'PATCH',body:{status:'Closed'}})).status,403);
  const farmerQueue=await call('/orders',{cookie:farmer});assert.equal(farmerQueue.status,200);assert.ok(farmerQueue.data.some(order=>order.id===create.data.id&&order.buyer_name==='Alex Morgan'));
+ assert.equal((await call('/orders/'+create.data.id,{cookie:farmer,method:'PATCH',body:{status:'Accepted'}})).status,409);
+ const listing=(await call('/listings/produce-1')).data;
+ assert.equal((await call('/orders/'+create.data.id+'/commit',{cookie:buyer,body:{acknowledge:true,terms:{unit_price_minor:listing.price_minor,currency:listing.currency,sale_unit:listing.sale_unit}}})).status,200);
  assert.equal((await call('/orders/'+create.data.id,{cookie:farmer,method:'PATCH',body:{status:'Accepted'}})).status,200);
- assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Accepted');
+ assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Approved');
  const other=await call('/orders',{cookie:buyer,body:{...body,listing_id:'produce-2',volume:25}});assert.equal(other.status,201);
  assert.ok(!(await call('/orders',{cookie:farmer})).data.some(order=>order.id===other.data.id));
  assert.equal((await call('/orders/'+other.data.id,{cookie:farmer,method:'PATCH',body:{status:'Accepted'}})).status,403);
  const admin=await demo('Admin');assert.ok((await call('/orders',{cookie:admin})).data.some(order=>order.id===other.data.id));
- assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,200);
- assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Contacted');
+ assert.equal((await call('/orders/'+create.data.id,{cookie:admin,method:'PATCH',body:{status:'Contacted'}})).status,409);
+ assert.equal((await call('/orders',{cookie:buyer})).data.find(order=>order.id===create.data.id).status,'Approved');
 });
 test('cross-origin writes and revoked sessions are rejected',async()=>{const cookie=await demo('Buyer');assert.equal((await call('/account/consent',{cookie,method:'PATCH',body:{sms_opt_in:true},headers:{Origin:'https://attacker.example'}})).status,403);await call('/auth/logout',{cookie,body:{}});assert.equal((await call('/orders',{cookie})).status,401);});
 test('checkout idempotency replays the original header and rejects key reuse with a new payload',async()=>{
@@ -151,10 +157,10 @@ test('last-unit confirmation reaches zero safely and concurrent confirmations ca
   await db.run('UPDATE listings SET available_volume=2 WHERE id=?',['produce-1']);
   const order=await call('/guest-orders',{body:{listing_id:'produce-1',quantity:2,contact_name:'Final Unit Buyer',contact_phone:'+265991112263',contact_email:'final@example.com',delivery_location:'Lilongwe city'}});
   assert.equal(order.status,201);
-  assert.equal((await call('/admin/guest-orders/'+order.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+  assert.equal((await call('/admin/guest-orders/'+order.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,409);
   assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),0);
   assert.equal((await call('/listings/produce-1')).status,404);
-  assert.equal((await call('/admin/guest-orders/'+order.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,200);
+  assert.equal((await call('/admin/guest-orders/'+order.data.checkout_id,{cookie:admin,method:'PATCH',body:{status:'Confirmed'}})).status,409);
   assert.equal(Number((await db.get('SELECT available_volume FROM listings WHERE id=?',['produce-1'])).available_volume),0);
 
   await db.run('UPDATE listings SET available_volume=1 WHERE id=?',['produce-1']);

@@ -16,8 +16,8 @@ export const metadata:Metadata = {
 export const viewport:Viewport = {width:'device-width',initialScale:1,viewportFit:'cover',themeColor:'#234c36'};
 export default function RootLayout({children}:{children:React.ReactNode}) {
   return (
-    <html lang="en">
-      {/* Browser extensions such as Monica add body attributes before hydration. */}
+    // Extensions can add attributes to both root elements before React hydrates.
+    <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
         <WirefenClient/>
         {children}

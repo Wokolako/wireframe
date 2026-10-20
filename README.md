@@ -16,7 +16,7 @@ npm.cmd run dev
 
 Open http://127.0.0.1:3000. The Next.js Node server handles both pages and `/api/v1/*`; live mode refuses to start without `DATABASE_URL` and does not silently use SQLite. Startup checks the schema version but does not apply DDL; run `npm.cmd run db:migrate` with a migration-capable database identity before each application deployment. For legacy listing prices without a recorded currency, set `LEGACY_PRICE_CURRENCY` to their actual currency before migrating; migration intentionally refuses to guess. The API uses Neon's WebSocket driver when direct PostgreSQL TCP is unavailable. Run `npm.cmd run db:check` and `npm.cmd run test:neon` to verify the connection, schema, limits and public API. The spreadsheet importer `npm.cmd run seed:limits` upserts the 44 household limits into Neon. It does not create farms, stock, prices, or verified listings. Run it only after confirming the target database, then restart the app to refresh its in-memory limit lookup.
 
-Guest household checkout places an order without an account. Pay on delivery remains available everywhere. For Malawi, configure `CURRENCY=MWK`, verified MWK listing prices, and server-side `PAYCHANGU_SECRET_KEY` plus `PAYCHANGU_WEBHOOK_SECRET` to show PayChangu mobile money. PayChangu checkouts must total a whole Kwacha. Checkout reserves available stock immediately; the customer can then start a mobile-money request. The customer’s checkout page polls server-side PayChangu verification, while the signed webhook provides an additional settlement path. PayChangu credentials are never exposed to the browser. Stripe/Europe is not configured.
+Guest household checkout does not require an account. Online payment is required before an order is confirmed; pay on delivery and manual bank transfer are unavailable. For Malawi, configure `CURRENCY=MWK`, verified MWK listing prices, and server-side `PAYCHANGU_SECRET_KEY` plus `PAYCHANGU_WEBHOOK_SECRET` to show PayChangu mobile money. PayChangu checkouts must total a whole Kwacha. Checkout reserves available stock immediately; the customer can then start a mobile-money request. The customer’s checkout page polls server-side PayChangu verification, while the signed webhook provides an additional settlement path. PayChangu credentials are never exposed to the browser. Stripe/Europe is not configured.
 
 Available stock and supplier locations are restricted to admin reports. The original specification's public `min_volume` and `max_volume` filters are intentionally unavailable to buyers because repeated filter queries would reveal hidden inventory.
 
@@ -115,7 +115,7 @@ All responses are JSON except the SMS webhook, which returns TwiML. Send JSON wi
 | GET | `/api/v1/listings` | Public; category, min_volume, max_volume, harvest_date_after, preservative, search; mine=true requires auth |
 | GET | `/api/v1/listings/:id` | Public |
 | POST | `/api/v1/listings` | Farmer owner or Admin |
-| POST | `/api/v1/guest-orders/basket` | Public household checkout; supports pay on delivery and configured PayChangu (MWK) |
+| POST | `/api/v1/guest-orders/basket` | Public household checkout; requires configured online PayChangu payment; unpaid checkouts are excluded from fulfilment |
 | GET | `/api/v1/guest-orders/:id/payment-status` | Checkout ID bearer token; returns sanitized status and verifies pending PayChangu payments server-side |
 | GET | `/api/v1/paychangu/operators` | Public when PayChangu is enabled; returns Malawi mobile-money operators |
 | POST | `/api/v1/paychangu/initialize` | Checkout ID bearer token; starts payment after household checkout reserves stock |
@@ -143,7 +143,29 @@ The Currency converter supports EUR, USD, GBP, MWK, ZMW, and ZAR when each quote
 
 Visit online once to install/cache the shell. Previously loaded catalogue requests can be reopened offline. The browser keeps a minimal last-session display snapshot to reopen its own saved draft; this does not authorize server operations. Actual API access is always checked by the server. Baseline and listing drafts are scoped to account + farmer and synchronized on reconnect. Final submissions need connectivity. Multiple-device concurrent draft edits use last-write-wins in Phase 1. Clearing site data removes unsynced drafts. Saved produce is a browser-local shortlist.
 
+## Online payment policy
+
+Checkout quotes are calculated and signed by the server, expire after ten minutes (or earlier when a source rate expires), and are bound to the basket, prices and payment method. Checkout reserves stock with `Awaiting payment` status. Only server-side provider verification moves it to `Confirmed`; unpaid or pending checkouts never enter the fulfilment queue. Pay on delivery and manual bank-transfer checkout are rejected. Manual payment collection cannot bypass mobile-money verification.
+
+Confirm and pay sends one mobile-money request for approval on the buyer's phone. Polling and refresh never send another prompt. Pay again checks the existing attempt and only starts a new charge after a confirmed failure or expiry; a pending or unverified charge is never replaced. The provider controls delivery of phone prompts and messages.
+
+Unpaid checkouts can be cancelled from their status page. Cancellation checks pending provider state, locks the checkout, releases stock once, stops browser polling, and returns the items to the basket. Already-sent provider prompts cannot be recalled: buyers must not approve them after cancellation. If a signed, verified webhook reports a late payment, the order stays Cancelled and appears to staff as refund required, without returning to fulfilment. Paid orders otherwise require a refund process. Settlement always verifies the stored payment quote without recalculating FX.
+
+Mixed-currency baskets retain each line's original price and use USD for the combined total. A current server quote converts that total to whole MWK for PayChangu; the selected display currency remains an estimate. Missing rates never fall back to an invented multiplier. Bank payment remains unavailable until a working integration is configured.
+
+Farmer order requests follow buyer commitment → farmer approval → approved request in the basket → verified online payment. Commitment records the exact unit price, currency, quantity and delivery details with an audit event. Farmers and admins cannot approve an uncommitted request. Existing unpaid requests require the buyer to review and commit before approval. Approval does not charge the buyer or hold stock; stock is reserved atomically when the buyer confirms checkout. Approved requests retain their agreed prices and use their own checkout, without household quantity caps. Repeated checkout calls resume the same active checkout. Cancelling payment returns the approved request to the basket without adding its bulk quantity to household items. Verified settlement updates the original request and its receipt; manual payment records cannot bypass verification.
+
+Run `npm run db:migrate` before starting an existing database with this version (migration 8 adds commitment and checkout links). Buyer routes are `POST /api/v1/orders/:id/commit`, `/withdraw`, `/quote` and `/checkout`; farmer approval uses `PATCH /api/v1/orders/:id`. Commitment and approval are separate from paid fulfilment.
+
+Set `CHECKOUT_QUOTE_SECRET` to the same long random value across app instances, or retain the same existing server credential from which quote signing is derived. Configure PayChangu credentials and its signed webhook before accepting live payments. Presentation mode does not offer real checkout.
+
 ## Verification
+
+Checkout status is restored from the saved checkout reference or a `/basket?checkout=...` link, for online payment. Status failures show a retry action and retain the reference; retrying does not place another order. Keep checkout links private because they grant access to the payment status.
+
+Currency rates are fetched through the server, with Frankfurter as the primary provider and ExchangeRate-API filling missing quotes or covering outages. Rates retain their actual dates and sources; expired rates and fixed example rates are never used for settlement. Shared server caching supports fresh browser sessions. The converter retains valid saved rates during outages, while payments require a current applicable quote.
+
+Run `node tests/reliability-ui.mjs` for isolated Chrome and installed Edge checks of fresh-browser conversion, payment-status retries, online checkout, payment gating, refresh recovery, and recovery with browser storage blocked.
 
 ```powershell
 npm.cmd test

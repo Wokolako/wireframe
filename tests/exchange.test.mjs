@@ -53,3 +53,38 @@ test('valid local-currency quotes remain available when another quote is absent 
  assert.equal(result.dates.MWK,'2026-10-16');
  assert.equal(result.rates.USD,undefined);
 });
+
+test('a fresh browser can obtain all rates from the backup when the primary is unavailable',async()=>{
+ let calls=0;
+ const get=createExchangeService({clock:()=>start,fetcher:async url=>{
+  calls++;
+  if(String(url).includes('frankfurter'))throw new Error('Provider outage');
+  assert.equal(url,'https://open.er-api.com/v6/latest/EUR');
+  return {ok:true,json:async()=>({result:'success',base_code:'EUR',time_last_update_unix:start/1000,rates:{EUR:1,USD:1.16,MWK:2000,ZMW:24,ZAR:20,GBP:0.86}})};
+ }});
+ const [malawi,zambia]=await Promise.all([get('MWK'),get('ZMW')]);
+ assert.equal(calls,2);
+ assert.deepEqual(malawi,zambia);
+ assert.equal(malawi.rates.MWK,2000);
+ assert.equal(malawi.sources.MWK,'https://www.exchangerate-api.com');
+ assert.equal(malawi.dates.MWK,'2026-10-17');
+});
+
+test('backup fills missing quotes without replacing current primary quotes',async()=>{
+ const get=createExchangeService({clock:()=>start,fetcher:async url=>({ok:true,json:async()=>String(url).includes('frankfurter')?
+  [{base:'EUR',quote:'USD',date:'2026-10-16',rate:1.16}]:
+  {result:'success',base_code:'EUR',time_last_update_unix:start/1000,rates:{USD:999,MWK:2000,ZMW:24,ZAR:20,GBP:0.86}}})});
+ const result=await get('MWK');
+ assert.equal(result.rates.USD,1.16);
+ assert.equal(result.rates.MWK,2000);
+});
+
+test('stale or wrong-base backup snapshots cannot become payment quotes',async()=>{
+ for(const body of [
+  {result:'success',base_code:'USD',time_last_update_unix:start/1000,rates:{MWK:2000}},
+  {result:'success',base_code:'EUR',time_last_update_unix:1,rates:{MWK:2000}},
+ ]){
+  const get=createExchangeService({clock:()=>start,fetcher:async url=>({ok:true,json:async()=>String(url).includes('frankfurter')?[]:body})});
+  await assert.rejects(get('MWK'),error=>error.status===503);
+ }
+});

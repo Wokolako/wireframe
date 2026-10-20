@@ -13,6 +13,7 @@
     "test:presentation": "node tests/presentation-ui.mjs",
     "test:live-storefront": "node tests/live-storefront-ui.mjs",
     "test:paychangu-ui": "node tests/paychangu-ui.mjs",
+    "test:order-requests-ui": "node tests/order-requests-ui.mjs",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",

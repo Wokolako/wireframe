@@ -28,7 +28,7 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  }else if(user?.role==='Admin'){user.role='Buyer';user.farmer=null;}
  const finish=(value:unknown)=>{memory=data;try{localStorage.setItem(key,JSON.stringify({...data,baselines:{}}));}catch{}return structuredClone(value);};
  const account=(roles:string[])=>{if(!user||!roles.includes(user.role))throw new Error('Sign in with an authorized account to continue.');return user;};
- if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey,capabilities:{guest_checkout:true,online_payments:true,paychangu_mobile_money:true,ussd:false,sms:false}};
+ if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey,capabilities:{guest_checkout:false,online_payments:false,paychangu_mobile_money:false,ussd:false,sms:false}};
  if(route==='/auth/me')return finish(user);
  if(route==='/auth/onboard'){
   if(!identity)throw new Error('Sign in with Clerk to create your profile.');if(user)return finish(user);
@@ -104,6 +104,12 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   const order=data.guestOrders?.find(r=>r.id===id);
   return finish({checkout_id:id,status:order?.status||'Confirmed',payment_method:'paychangu_mobile_money',payment_status:order?.payment_status||'unpaid',currency:order?.currency||'USD',total_minor:2500,mwk_total:43306});
  }
+ if(route.startsWith('/guest-orders/')&&route.endsWith('/cancel')){
+  const id=decodeURIComponent(route.split('/')[2]);
+  const order=data.guestOrders?.find(r=>r.id===id);
+  if(order){order.status='Cancelled';order.payment_status='cancelled';}
+  return finish({checkout_id:id,status:'Cancelled',payment_status:'cancelled'});
+ }
  const farmRoute=route.match(/^\/farmers\/([^/]+)\/(baseline|listing-draft)$/);
  if(farmRoute){
   const [,id,kind]=farmRoute,u=account(kind==='baseline'?['Farmer']:['Farmer','Admin']),farm=data.farmers.find(f=>f.id===id);
@@ -137,14 +143,36 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  if(route==='/orders'){
   const u=account(method==='GET'?['Buyer','Farmer','Admin']:['Buyer']);if(method==='GET')return finish(data.orders.filter(o=>u.role==='Admin'||u.role==='Buyer'&&o.buyer_id===u.id||u.role==='Farmer'&&data.listings.find(l=>l.id===o.listing_id)?.farmer_id===u.farmer?.id));
   const item=data.listings.find(l=>l.id===body.listing_id);if(!item||item.available_volume==null||Number(body.volume)<=0||Number(body.volume)>item.available_volume)throw new Error('Enter a quantity within the available supply.');const id=crypto.randomUUID();
-  data.orders.unshift({id,listing_id:item.id,title:item.title,volume:Number(body.volume),delivery_location:String(body.delivery_location),notes:String(body.notes||''),status:'New',created_at:now(),buyer_id:u.id,buyer_name:u.name,phone:u.phone});return finish({id,status:'New'});
+  const terms=body.terms as {unit_price_minor:number;currency:string;sale_unit:string}|undefined;
+  if(body.commit&&(!terms||terms.unit_price_minor!==Math.round(item.price*100)||terms.currency!==(item.currency||'ZAR')||terms.sale_unit!==(item.sale_unit||'kg')))throw new Error('The price or unit changed. Review the request before committing.');
+  const status=body.commit?'Committed':'New';
+  data.orders.unshift({id,listing_id:item.id,title:item.title,volume:Number(body.volume),delivery_location:String(body.delivery_location),notes:String(body.notes||''),status,created_at:now(),buyer_id:u.id,buyer_name:u.name,phone:u.phone,sale_unit:item.sale_unit||'kg',price_minor:Math.round(item.price*100),listing_currency:item.currency||'ZAR',...(body.commit?{committed_at:now(),committed_unit_price_minor:terms!.unit_price_minor,committed_currency:terms!.currency,committed_sale_unit:terms!.sale_unit}:{})});return finish({id,status});
  }
- if(route.startsWith('/orders/')&&method==='PATCH'){const u=account(['Farmer','Admin']),order=data.orders.find(o=>o.id===route.split('/')[2]);if(!order)throw new Error('Sample request not found.');const listing=data.listings.find(l=>l.id===order.listing_id);if(u.role==='Farmer'&&listing?.farmer_id!==u.farmer?.id)throw new Error('You can only manage requests for your own produce.');if(u.role==='Farmer'&&!['Accepted','Declined','Approved','Denied','Contacted','Closed'].includes(String(body.status)))throw new Error('Choose a seller response for this request.');order.status=String(body.status);return finish({ok:true,status:order.status});}
+ if(route.startsWith('/orders/')&&route.endsWith('/commit')){
+  const u=account(['Buyer']),order=data.orders.find(o=>o.id===route.split('/')[2]&&o.buyer_id===u.id),terms=body.terms as {unit_price_minor:number;currency:string;sale_unit:string}|undefined;
+  if(!order)throw new Error('Request not found.');
+  if(order.committed_at)return finish({id:order.id,status:order.status});
+  const listing=data.listings.find(l=>l.id===order.listing_id);
+  if(!listing||!['New','In review','Contacted','Approved','Accepted'].includes(order.status)||body.acknowledge!==true||terms?.unit_price_minor!==Math.round(listing.price*100)||terms?.currency!==(listing.currency||'ZAR')||terms?.sale_unit!==(listing.sale_unit||'kg'))throw new Error('Review the quantity, price and delivery details before committing.');
+  Object.assign(order,{status:'Committed',committed_at:now(),committed_unit_price_minor:terms.unit_price_minor,committed_currency:terms.currency,committed_sale_unit:terms.sale_unit});return finish({id:order.id,status:order.status});
+ }
+ if(route.startsWith('/orders/')&&(route.endsWith('/quote')||route.endsWith('/checkout')))throw new Error('Online payment is not available in presentation mode.');
+ if(route.startsWith('/orders/')&&method==='PATCH'){
+  const u=account(['Farmer','Admin']),order=data.orders.find(o=>o.id===route.split('/')[2]);if(!order)throw new Error('Sample request not found.');
+  const listing=data.listings.find(l=>l.id===order.listing_id);if(u.role==='Farmer'&&listing?.farmer_id!==u.farmer?.id)throw new Error('You can only manage requests for your own produce.');
+  const status=body.status==='Accepted'?'Approved':body.status==='Declined'?'Denied':String(body.status);
+  if(status==='Approved'&&!order.committed_at)throw new Error('Buyer commitment is required before approval.');
+  if(['Closed','Denied','Cancelled'].includes(order.status))throw new Error('This request cannot be reopened.');
+  if(['Approved','Confirmed'].includes(order.status)&&!(status==='Closed'&&order.payment_status==='paid'))throw new Error('Approved requests stay available for payment.');
+  if(status==='Closed'&&order.payment_status!=='paid')throw new Error('Payment must be verified before closing a request.');
+  order.status=status;if(status==='Approved')order.approved_at=now();return finish({ok:true,status});
+ }
  if(route==='/payments'){
   const u=account(method==='GET'?['Buyer','Admin']:['Buyer','Admin']);
   if(method==='GET')return finish((data.payments||[]).filter(p=>u.role==='Admin'||p.buyer_id===u.id));
   const order=data.orders.find(o=>o.id===body.order_id);
   if(!order)throw new Error('Order not found.');
+  if(order.committed_at)throw new Error('Committed requests require verified online payment.');
   const id=crypto.randomUUID(),nowStr=now();
   const prefix=body.currency==='MWK'?'MWK':body.currency==='ZMW'?'ZMW':String(body.currency||'MWK');
   const ref=`WF-${prefix}-${Date.now().toString().slice(-6)}-DEMO`;

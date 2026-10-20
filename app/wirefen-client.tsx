@@ -12,6 +12,18 @@ const AuthRoot = dynamic(() => import('../src/auth').then(module => module.AuthR
 export function WirefenClient() {
   const router = useRouter();
   useEffect(() => {
+    // Ignore errors injected by browser extensions (e.g. MetaMask inpage.js)
+    const handleExtensionError = (event: ErrorEvent | PromiseRejectionEvent) => {
+      const filename = 'filename' in event ? (event as ErrorEvent).filename : '';
+      const message = 'message' in event ? (event as ErrorEvent).message : String((event as PromiseRejectionEvent).reason?.message || (event as PromiseRejectionEvent).reason || '');
+      if (filename?.startsWith('chrome-extension://') || filename?.startsWith('moz-extension://') || message?.toLowerCase().includes('metamask')) {
+        event.preventDefault();
+        event.stopImmediatePropagation?.();
+      }
+    };
+    window.addEventListener('error', handleExtensionError);
+    window.addEventListener('unhandledrejection', handleExtensionError);
+
     // Preserve bookmarks from the previous hash router.
     if(location.hash.startsWith('#/') && !location.hash.startsWith('#//'))router.replace(location.hash.slice(1));
     if(process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) {
@@ -23,6 +35,10 @@ export function WirefenClient() {
         }
       }).catch(() => {});
     }
+    return () => {
+      window.removeEventListener('error', handleExtensionError);
+      window.removeEventListener('unhandledrejection', handleExtensionError);
+    };
   },[router]);
   return <AuthRoot/>;
 }
