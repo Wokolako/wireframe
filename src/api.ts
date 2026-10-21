@@ -17,7 +17,7 @@ export function setTokenGetter(getter:typeof getToken){getToken=getter;}
 export async function api<T>(path:string,options:RequestInit={}):Promise<T>{
  if(PRESENTATION_MODE)return await demoApi(path,options) as T;
  // Public rates and bearer-link order status must also work before sign-in loads.
- const publicRead=path==='/guest-orders/quote'||/^\/guest-orders\/[^/]+\/cancel$/.test(path)||(!options.method||options.method==='GET')&&(path==='/exchange-rates'||/^\/guest-orders\/[^/]+\/payment-status$/.test(path));
+ const publicRead=path==='/guest-orders/quote'||/^\/guest-orders\/[^/]+\/cancel$/.test(path)||(!options.method||options.method==='GET')&&(path==='/exchange-rates'||path==='/catalogue'||path==='/guest-limits'||(path.startsWith('/listings')&&!path.includes('mine=true'))||/^\/guest-orders\/[^/]+\/payment-status$/.test(path));
  const token=publicRead?null:await getToken?.();
  const request=async()=>{
   const response=await fetch('/api/v1'+path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`} : {}),...options.headers}});

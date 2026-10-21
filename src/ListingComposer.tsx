@@ -81,7 +81,7 @@ export function ListingComposer({farmerId,user,currency,notify}:Props){
     const img=new Image();
     img.onerror=()=>reject(new Error(`Failed to load ${file.name}`));
     img.onload=()=>{
-     const maxDim=1000;
+     const maxDim=500;
      let width=img.width,height=img.height;
      if(width>maxDim||height>maxDim){
       if(width>height){
@@ -97,7 +97,7 @@ export function ListingComposer({farmerId,user,currency,notify}:Props){
      const ctx=canvas.getContext('2d');
      if(ctx){
       ctx.drawImage(img,0,0,width,height);
-      resolve(canvas.toDataURL('image/jpeg',0.78));
+      resolve(canvas.toDataURL('image/jpeg',0.7));
      }else{
       resolve(raw);
      }

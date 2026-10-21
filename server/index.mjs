@@ -125,7 +125,13 @@ app.patch('/api/v1/farmers/:id/listing-draft',permit('Farmer','Admin'),async(req
 const date=z.iso.date();
 const listing=z.object({farmer_id:z.string().min(1),produce_id:z.string().min(1),title:z.string().trim().min(3).max(100),crop_category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']),available_volume:z.number().positive().max(1e9),sale_unit:z.enum(['kg','tonnes','cobs','heads','bundles','fruits','bunches','canes']),price:z.number().positive().max(1e9),currency:z.enum(['MWK','ZMW','ZAR','USD','EUR','GBP']).default('MWK'),harvest_date:date,expiration_date:date,shelf_life_days:z.number().int().positive().max(3650),preservative_used:z.boolean(),description:z.string().trim().max(2000).default(''),traceability:z.string().trim().max(100).default(''),image:z.string().max(10000000).optional(),images:z.array(z.string().max(10000000)).optional()}).refine(v=>v.expiration_date>=v.harvest_date,{message:'Expiry must be on or after harvest.',path:['expiration_date']}).refine(v=>{const produce=produceById(v.produce_id);return !!produce&&produce.unit===v.sale_unit&&produce.category===v.crop_category;},{message:'Select a produce type with the matching category and sale unit.',path:['produce_id']});
 const joinListing="SELECT l.*,f.farm_name,f.location,f.country,f.country_code,f.region,f.locality,f.verification_status,v.score AS agent_score,v.status AS agent_verification_status,v.updated_at AS verified_at FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id LEFT JOIN listing_verifications v ON v.listing_id=l.id";
-const parseImages=l=>{if(l.images){try{const arr=JSON.parse(l.images);if(Array.isArray(arr)&&arr.length)return arr;}catch(e){}}return l.image?[l.image]:[];};
+const listingSummaryCols="l.id,l.farmer_id,l.produce_id,l.title,l.crop_category,l.available_volume,l.sale_unit,l.price,l.price_minor,l.currency,l.harvest_date,l.expiration_date,l.shelf_life_days,l.preservative_used,l.description,l.image,l.traceability,l.agent_score,l.status,l.created_at,CASE WHEN l.images IS NOT NULL AND length(l.images)>2 THEN 3 ELSE 1 END AS photo_count";
+const joinListingSummary=`SELECT ${listingSummaryCols},f.farm_name,f.location,f.country,f.country_code,f.region,f.locality,f.verification_status,v.score AS agent_score,v.status AS agent_verification_status,v.updated_at AS verified_at FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id LEFT JOIN listing_verifications v ON v.listing_id=l.id`;
+const parseImages=l=>{
+ if(l.images){try{const arr=JSON.parse(l.images);if(Array.isArray(arr)&&arr.length)return arr;}catch(e){}}
+ if(l.photo_count&&Number(l.photo_count)>1)return new Array(Number(l.photo_count)).fill(l.image||'');
+ return l.image?[l.image]:[];
+};
 const storefrontListing=l=>({id:l.id,produce_id:l.produce_id,title:produceById(l.produce_id)?.name||l.crop_category,crop_category:l.crop_category,price:Number(l.price_minor??minorUnits(l.price))/100,currency:l.currency||process.env.CURRENCY||'ZAR',price_minor:Number(l.price_minor??minorUnits(l.price)),sale_unit:l.sale_unit||'kg',
  harvest_date:l.harvest_date,expiration_date:l.expiration_date,shelf_life_days:l.shelf_life_days,
  preservative_used:l.preservative_used,description:`Verified ${l.crop_category.toLowerCase()} available through Wirefen.`,image:l.image,images:parseImages(l),
@@ -164,7 +170,7 @@ app.get('/api/v1/listings',async(req,res)=>{
  if(q.search&&q.mine){where+=' AND LOWER(l.title) LIKE ?';params.push(`%${q.search.toLowerCase()}%`);}
  const [count,rows]=await Promise.all([
   db.get('SELECT COUNT(*) AS count FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id'+where,params),
-  db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT ? OFFSET ?', [...params,q.page_size,(q.page-1)*q.page_size])
+  db.all(joinListingSummary+where+' ORDER BY l.created_at DESC,l.id LIMIT ? OFFSET ?', [...params,q.page_size,(q.page-1)*q.page_size])
  ]);
  const data=rows.map(row=>{
   const base=storefrontListing(row);

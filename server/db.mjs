@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS ussd_sessions (session_id TEXT PRIMARY KEY, phone_num
 CREATE INDEX IF NOT EXISTS listings_category_idx ON listings(crop_category,harvest_date);
 CREATE INDEX IF NOT EXISTS listings_status_avail_idx ON listings(status, available_volume, expiration_date);
 CREATE INDEX IF NOT EXISTS listings_farmer_idx ON listings(farmer_id);
-CREATE INDEX IF NOT EXISTS listings_created_idx ON listings(created_at DESC);
 CREATE INDEX IF NOT EXISTS farmer_verification_idx ON farmer_profiles(verification_status);
 CREATE INDEX IF NOT EXISTS orders_buyer_idx ON order_requests(buyer_id);
 CREATE INDEX IF NOT EXISTS payments_order_idx ON payments(order_id);
