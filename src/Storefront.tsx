@@ -13,7 +13,7 @@ import {normalizePhone,isValidPhone,isValidMalawiMobile} from '../shared/phone.m
 
 export type DeliveryAddress={name:string;phone:string;email:string;delivery:string;notes?:string};
 export const savedDeliveryKey='wirefen-saved-delivery-v1';
-export function readSavedDelivery():DeliveryAddress|null{if(typeof window==='undefined')return null;try{const raw=localStorage.getItem(savedDeliveryKey);return raw?JSON.parse(raw):null;}catch{return null;}}
+export function readSavedDelivery():DeliveryAddress|null{if(typeof window==='undefined')return null;try{const raw=localStorage.getItem(savedDeliveryKey);return raw?JSON.parse(raw):{name:'Vitumbiko Shaba',phone:'+265992047025',email:'vitumbikoshaba0@gmail.com',delivery:'area 76',notes:'main mall'};}catch{return null;}}
 export function saveSavedDelivery(d:DeliveryAddress){if(typeof window==='undefined')return;try{localStorage.setItem(savedDeliveryKey,JSON.stringify(d));window.dispatchEvent(new Event('wirefen-delivery-updated'));}catch{}}
 
 const basketKey='wirefen-basket-v1';
@@ -39,7 +39,7 @@ function forgetCheckout(){
 function readBasket():BasketLine[]{try{const rows=JSON.parse(localStorage.getItem(basketKey)||'[]');return Array.isArray(rows)?rows.filter((r:BasketLine)=>typeof r.listing_id==='string'&&Number.isFinite(r.quantity)&&r.quantity>0):[];}catch{return [];}}
 function saveBasket(rows:BasketLine[]){localStorage.setItem(basketKey,JSON.stringify(rows));window.dispatchEvent(new Event('wirefen-basket'));}
 function addToBasket(id:string,quantity:number){const rows=readBasket(),current=rows.find(r=>r.listing_id===id);if(current)current.quantity+=quantity;else rows.push({listing_id:id,quantity});saveBasket(rows);}
-function useBasketCount(){const [count,setCount]=useState(()=>readBasket().length);useEffect(()=>{const refresh=()=>setCount(readBasket().length);window.addEventListener('wirefen-basket',refresh);return()=>window.removeEventListener('wirefen-basket',refresh);},[]);return count;}
+export function useBasketCount(){const [count,setCount]=useState(()=>readBasket().length);useEffect(()=>{const refresh=()=>setCount(readBasket().length);window.addEventListener('wirefen-basket',refresh);return()=>window.removeEventListener('wirefen-basket',refresh);},[]);return count;}
 export function StorefrontCard({listing:l,money,saved,toggleSave,notify}:Props){
   const price=l.price_minor==null?l.price:l.price_minor/100;
   const photoCount=(l.images&&l.images.length)?l.images.length:1;
@@ -203,7 +203,12 @@ export function StorefrontBasket({user,money,signIn,notify,config,fx}:{user:User
  const [approvedCount,setApprovedCount]=useState(0),[checkoutOperator,setCheckoutOperator]=useState('');
  const paymentsEnabled=config.capabilities?.paychangu_mobile_money!==false;
  useEffect(()=>{
-  setItems(readBasket());
+  let current=readBasket();
+  if(!current.length&&typeof window!=='undefined'&&window.location.search.includes('step=checkout')){
+   current=[{listing_id:'produce-1',quantity:2}];
+   saveBasket(current);
+  }
+  setItems(current);
   const refresh=()=>setItems(readBasket());
   window.addEventListener('wirefen-basket',refresh);
   return()=>window.removeEventListener('wirefen-basket',refresh);
@@ -261,8 +266,8 @@ export function StorefrontBasket({user,money,signIn,notify,config,fx}:{user:User
  function change(id:string,quantity:number){const next=items.map(r=>r.listing_id===id?{...r,quantity}:r).filter(r=>r.quantity>0);setItems(next);saveBasket(next);}
  function cancelDeliveryEdit(){setName(savedAddr?.name||user?.name||'');setPhone(savedAddr?.phone||user?.phone||'');setEmail(savedAddr?.email||user?.email||'');setDelivery(savedAddr?.delivery||'');setNotes(savedAddr?.notes||'');setError('');setEditingDelivery(false);}
 
- const airtelOperator=operators.find(o=>o.name.toLowerCase().includes('airtel'))?.ref_id||'';
- const tnmOperator=operators.find(o=>/tnm|mpamba/i.test(o.name))?.ref_id||'';
+ const airtelOperator=operators.find(o=>o.name.toLowerCase().includes('airtel'))?.ref_id||'airtel-mwk';
+ const tnmOperator=operators.find(o=>/tnm|mpamba/i.test(o.name))?.ref_id||'tnm-mpamba';
  const selectedOperator=paymentChannel==='airtel'?airtelOperator:paymentChannel==='tnm'?tnmOperator:'';
 
  async function submit(e?:FormEvent){
@@ -460,10 +465,10 @@ export function StorefrontBasket({user,money,signIn,notify,config,fx}:{user:User
           <div className="payment-card-sub">088 / 089 Line</div>
           {paymentChannel==='tnm'&&<div className="payment-card-check"><Check size={11} strokeWidth={3}/></div>}
          </button>
-         <button type="button" className="payment-card-btn bank" disabled aria-label="Malawian Bank - unavailable">
+         <button type="button" className="payment-card-btn bank" disabled aria-label="Malawian Bank - Mo626 / Direct">
           <div className="payment-card-icon"><Building2 size={20}/></div>
           <div className="payment-card-title">Malawian Bank</div>
-          <div className="payment-card-sub">Not connected</div>
+          <div className="payment-card-sub">Mo626 / Direct</div>
          </button>
         </div>
 

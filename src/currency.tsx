@@ -5,32 +5,40 @@ import {api,readLocal,writeLocal} from './api';
 
 type Rates={base:string;rates:Record<string,number>;dates:Record<string,string>;sources?:Record<string,string>;fetched_at:string;source:string;stale:boolean;demo?:boolean};
 const MAX_AGE=7*86400000;
+export const normalizeCurrency=(c:string)=>{
+ const upper=String(c||'').toUpperCase();
+ if(upper==='MKW'||upper==='MK')return 'MWK';
+ return upper;
+};
 export const formatMoney=(amount:number,currency:string)=>{
- const digits=currency==='MWK'&&Number.isInteger(amount)?0:2;
- const formatted=new Intl.NumberFormat('en-ZA',{maximumFractionDigits:digits,minimumFractionDigits:digits}).format(amount);
- if(currency==='MWK')return `MWK ${formatted}`;
- if(currency==='ZMW')return `ZMW ${formatted}`;
- if(currency==='USD')return `$${formatted}`;
- if(currency==='EUR')return `€${formatted}`;
- if(currency==='GBP')return `£${formatted}`;
- if(currency==='ZAR')return `R ${formatted}`;
- return `${currency} ${formatted}`;
+ const code=normalizeCurrency(currency);
+ const digits=code==='MWK'&&Number.isInteger(amount)?0:2;
+ const formatted=new Intl.NumberFormat('en-US',{maximumFractionDigits:digits,minimumFractionDigits:digits}).format(amount);
+ if(code==='MWK')return `MWK ${formatted}`;
+ if(code==='ZMW')return `ZMW ${formatted}`;
+ if(code==='USD')return `$${formatted}`;
+ if(code==='EUR')return `€${formatted}`;
+ if(code==='GBP')return `£${formatted}`;
+ if(code==='ZAR')return `R ${formatted}`;
+ return `${code} ${formatted}`;
 };
 function currentRates(value:Rates|null):Rates|null {
  if(!value||value.base!=='EUR'||value.rates?.EUR!==1)return null;
  const rates:Record<string,number>={EUR:1},dates:Record<string,string>={},sources:Record<string,string>={};
  for(const currency of ['USD','MWK','ZMW','ZAR','GBP']){
-  const rate=value.rates?.[currency],date=value.dates?.[currency];
+  const rate=value.rates?.[currency]??(currency==='MWK'?(value.rates?.['MKW']??value.rates?.['MK']):undefined);
+  const date=value.dates?.[currency]??(currency==='MWK'?(value.dates?.['MKW']??value.dates?.['MK']):undefined);
   const timestamp=Date.parse(`${date}T00:00:00Z`);
   if(Number.isFinite(rate)&&rate>0&&typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(timestamp)&&Date.now()-timestamp<=MAX_AGE&&timestamp<=Date.now()+86400000){
    rates[currency]=rate;dates[currency]=date;
    if(value.sources?.[currency])sources[currency]=value.sources[currency];
+   else if(currency==='MWK'&&(value.sources?.['MKW']||value.sources?.['MK']))sources[currency]=value.sources['MKW']||value.sources['MK'];
   }
  }
  return Object.keys(rates).length>1?{...value,rates,dates,sources}:null;
 }
 export function useCurrency(market:string,online:boolean){
- const [preference,setPreference]=useState(()=>readLocal<string>('wirefen-display-currency',''));
+ const [preference,setPreference]=useState(()=>normalizeCurrency(readLocal<string>('wirefen-display-currency','')));
  const [rates,setRates]=useState<Rates|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState('');
  const requestId=useRef(0),memoryRates=useRef<Rates|null>(null);
  const refresh=useCallback(async()=>{
@@ -51,17 +59,25 @@ export function useCurrency(market:string,online:boolean){
  const validRates=currentRates(rates);
  const currency=currencies.includes(preference)?preference:market;
  const choose=(value:string)=>{
-  if(!currencies.includes(value))return;
-  setPreference(value);writeLocal('wirefen-display-currency',value);
-  if(value!==market&&(!validRates?.rates[value]||!validRates?.rates[market])&&!loading)void refresh();
+  const normalized=normalizeCurrency(value);
+  if(!currencies.includes(normalized))return;
+  setPreference(normalized);writeLocal('wirefen-display-currency',normalized);
+  if(normalized!==market&&(!validRates?.rates[normalized]||!validRates?.rates[market])&&!loading)void refresh();
  };
- const convert=(amount:number,from:string,to:string):number|null=>from===to?amount:validRates?.rates[from]&&validRates?.rates[to]?amount/validRates.rates[from]*validRates.rates[to]:null;
- const money=(amount:number,source=market)=>{const converted=convert(amount,source,currency);return formatMoney(converted??amount,converted===null?source:currency);};
+ const convert=(amount:number,from:string,to:string):number|null=>{
+  const f=normalizeCurrency(from),t=normalizeCurrency(to);
+  return f===t?amount:validRates?.rates[f]&&validRates?.rates[t]?amount/validRates.rates[f]*validRates.rates[t]:null;
+ };
+ const money=(amount:number,source=market)=>{
+  const s=normalizeCurrency(source);
+  const converted=convert(amount,s,currency);
+  return formatMoney(converted??amount,converted===null?s:currency);
+ };
  return {market,currency,currencies,rates:validRates,loading,error,choose,convert,money,refresh};
 }
 export type CurrencyState=ReturnType<typeof useCurrency>;
 export function CurrencySelect({fx}:{fx:CurrencyState}){
- const symbols:Record<string,string>={MWK:' MK',ZMW:' ZK',ZAR:' R',EUR:' €',USD:' $',GBP:' £'};
+ const symbols:Record<string,string>={MWK:' MK',MKW:' MK',ZMW:' ZK',ZAR:' R',EUR:' €',USD:' $',GBP:' £'};
  return <label className="currency-select"><span className="sr-only">Display currency</span><select aria-label="Display currency" value={fx.currency} onChange={e=>fx.choose(e.target.value)}>{fx.currencies.map(c=><option key={c} value={c}>{c}{symbols[c]||''}</option>)}</select></label>;
 }
 export function CurrencyNotice({fx}:{fx:CurrencyState}){

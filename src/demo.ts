@@ -28,7 +28,7 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  }else if(user?.role==='Admin'){user.role='Buyer';user.farmer=null;}
  const finish=(value:unknown)=>{memory=data;try{localStorage.setItem(key,JSON.stringify({...data,baselines:{}}));}catch{}return structuredClone(value);};
  const account=(roles:string[])=>{if(!user||!roles.includes(user.role))throw new Error('Sign in with an authorized account to continue.');return user;};
- if(route==='/config')return {demo:true,presentation:true,market:'South Africa (sample market)',currency:'ZAR',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey,capabilities:{guest_checkout:false,online_payments:false,paychangu_mobile_money:false,ussd:false,sms:false}};
+ if(route==='/config')return {demo:true,presentation:true,market:'Malawi',currency:'MWK',sms_ready:false,auth_provider:'clerk',clerk_publishable_key:clerkPublishableKey,capabilities:{guest_checkout:true,online_payments:true,paychangu_mobile_money:true,ussd:false,sms:false}};
  if(route==='/auth/me')return finish(user);
  if(route==='/auth/onboard'){
   if(!identity)throw new Error('Sign in with Clerk to create your profile.');if(user)return finish(user);
@@ -49,7 +49,7 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  if(route==='/auth/demo')throw new Error('Sample account switching is disabled. Sign in with your Clerk account.');
  if(route==='/auth/logout'){data.session=null;data.baselines={};return finish({ok:true});}
  if(route.startsWith('/auth/'))throw new Error('Use Clerk to sign in or create your account.');
- if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,ZAR:20},dates:{USD:day(),ZAR:day()},sources:{USD:'presentation-sample',ZAR:'presentation-sample'},fetched_at:now(),source:'Illustrative presentation rates (not live)',stale:false,demo:true};
+ if(route==='/exchange-rates')return {base:'EUR',rates:{EUR:1,USD:1.1,MWK:2000,ZMW:25,ZAR:20,GBP:0.9},dates:{USD:day(),MWK:day(),ZMW:day(),ZAR:day(),GBP:day()},sources:{USD:'presentation-sample',MWK:'presentation-sample',ZMW:'presentation-sample',ZAR:'presentation-sample',GBP:'presentation-sample'},fetched_at:now(),source:'Illustrative presentation rates (not live)',stale:false,demo:true};
  if(route==='/pwa/session'||route==='/pwa/events'){if(method==='POST'&&['prompted','dismissed','installed'].includes(String(body.event)))data.pwa[String(body.event)+'_at']??=now();return finish({...data.pwa,suppress_prompt:!!(data.pwa.prompted_at||data.pwa.dismissed_at||data.pwa.installed_at),device_installed:!!data.pwa.installed_at});}
  if(route==='/account/consent'){account(['Farmer','Buyer','Admin','Agent']).sms_opt_in=!!body.sms_opt_in;return finish({ok:true});}
  if(route==='/account/location'){
@@ -85,14 +85,30 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   if(recent+Number(body.quantity)>cap.max)throw new Error(`The household limit is ${cap.max} kg across orders in 24 hours. Use Order Request.`);
   const row={...body,quantity_unit:cap.unit,payment_method:'paychangu_mobile_money',payment_status:'unpaid',unit_price:item.price,currency:'ZAR',id:crypto.randomUUID(),status:'Confirmed',created_at:now()};data.guestOrders??=[];data.guestOrders.push(row);return finish({id:row.id,checkout_id:row.id,status:'Confirmed',payment_method:'paychangu_mobile_money',payment_status:'unpaid'});
  }
+ if(route==='/guest-orders/quote'){
+  const items=((body as {items?:Array<{listing_id:string;quantity:number}>})?.items||[]) as Array<{listing_id:string;quantity:number}>;
+  let totalMinor=0;
+  const quoteItems=items.map(line=>{
+   const item=data.listings.find(l=>l.id===line.listing_id);
+   const unitPriceMinor=item?.price_minor!=null?item.price_minor:item?Math.round(item.price*100):125000;
+   const lineTotalMinor=Math.round(unitPriceMinor*line.quantity);
+   totalMinor+=lineTotalMinor;
+   return {listing_id:line.listing_id,quantity:line.quantity,currency:item?.currency||'MWK',unit_price_minor:unitPriceMinor,line_total_minor:lineTotalMinor};
+  });
+  const firstItem=data.listings.find(l=>l.id===items[0]?.listing_id);
+  const currency=firstItem?.currency||'MWK';
+  let payableMinor=totalMinor;
+  if(currency==='ZAR'){payableMinor=Math.round((totalMinor/100)*1732.28)*100;}
+  return finish({quote_token:'demo-quote-token-'+Date.now(),currency,total_minor:totalMinor,payable_currency:'MWK',payable_minor:payableMinor,mwk_total:payableMinor/100,quote_expires_at:new Date(Date.now()+10*60*1000).toISOString(),items:quoteItems});
+ }
  if(route==='/guest-orders/basket'){
   const items=body.items as {listing_id:string;quantity:number}[];
   if(!Array.isArray(items)||!items.length||new Set(items.map(x=>x.listing_id)).size!==items.length)throw new Error('Choose distinct produce for your basket.');
   const totals=new Map<string,number>();for(const prior of data.guestOrders||[]){if(prior.status==='Cancelled'||Date.now()-Date.parse(String(prior.created_at))>86400000||prior.contact_phone!==body.contact_phone&&String(prior.contact_email).toLowerCase()!==String(body.contact_email).toLowerCase())continue;const listing=data.listings.find(l=>l.id===prior.listing_id),cap=guestLimitFor(listing?.title||'');if(cap)totals.set(cap.name,(totals.get(cap.name)||0)+Number(prior.quantity));}
   for(const line of items){const item=data.listings.find(l=>l.id===line.listing_id&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified'),cap=guestLimitFor(item?.title||'');if(!item||item.available_volume==null||!cap||cap.unit!==(item.sale_unit||'kg')||!(line.quantity>0)||line.quantity>item.available_volume)throw new Error('This produce needs an Order Request.');totals.set(cap.name,(totals.get(cap.name)||0)+line.quantity);if((totals.get(cap.name)||0)>cap.max)throw new Error(`${cap.name} has a household limit of ${cap.max} ${cap.unit}. Use Order Request.`);}
-  const rows=items.map(line=>({...body,items:undefined,listing_id:line.listing_id,quantity:line.quantity,quantity_unit:guestLimitFor(data.listings.find(l=>l.id===line.listing_id)?.title||'')?.unit||'kg',payment_method:'paychangu_mobile_money',payment_status:'unpaid',unit_price:data.listings.find(l=>l.id===line.listing_id)?.price,currency:'ZAR',id:crypto.randomUUID(),status:'Confirmed',created_at:now()}));data.guestOrders??=[];data.guestOrders.push(...rows);return finish({checkout_id:rows[0].id,ids:rows.map(r=>r.id),status:'Confirmed',payment_method:'paychangu_mobile_money',payment_status:'unpaid'});
+  const rows=items.map(line=>({...body,items:undefined,listing_id:line.listing_id,quantity:line.quantity,quantity_unit:guestLimitFor(data.listings.find(l=>l.id===line.listing_id)?.title||'')?.unit||'kg',payment_method:'paychangu_mobile_money',payment_status:'unpaid',unit_price:data.listings.find(l=>l.id===line.listing_id)?.price,currency:'MWK',id:crypto.randomUUID(),status:'Confirmed',created_at:now()}));data.guestOrders??=[];data.guestOrders.push(...rows);return finish({checkout_id:rows[0].id,ids:rows.map(r=>r.id),status:'Confirmed',payment_method:'paychangu_mobile_money',payment_status:'unpaid'});
  }
- if(route==='/paychangu/operators')return finish({data:[{ref_id:'airtel-mwk',name:'Airtel Money (MWK)'},{ref_id:'tnm-mpamba',name:'TNM Mpamba (MWK)'}]});
+ if(route==='/paychangu/operators')return finish({data:[{ref_id:'airtel-mwk',name:'Airtel Money'},{ref_id:'tnm-mpamba',name:'TNM Mpamba'}]});
  if(route==='/paychangu/initialize'){
   const chargeId=`WF${crypto.randomUUID().replaceAll('-','').slice(0,20)}`;
   const order=data.guestOrders?.find(r=>r.id===body.checkout_id);
@@ -102,7 +118,7 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
  if(route.startsWith('/guest-orders/')&&route.endsWith('/payment-status')){
   const id=decodeURIComponent(route.split('/')[2]);
   const order=data.guestOrders?.find(r=>r.id===id);
-  return finish({checkout_id:id,status:order?.status||'Confirmed',payment_method:'paychangu_mobile_money',payment_status:order?.payment_status||'unpaid',currency:order?.currency||'USD',total_minor:2500,mwk_total:43306});
+  return finish({checkout_id:id,status:order?.status||'Confirmed',payment_method:'paychangu_mobile_money',payment_status:order?.payment_status||'unpaid',currency:order?.currency||'MWK',total_minor:250000,mwk_total:2500});
  }
  if(route.startsWith('/guest-orders/')&&route.endsWith('/cancel')){
   const id=decodeURIComponent(route.split('/')[2]);
@@ -139,7 +155,13 @@ export async function demoApi(path:string,options:RequestInit={}):Promise<unknow
   if(!hasGeography(farm))throw new Error('Complete your farm location in Settings.');const id=crypto.randomUUID(),crop_category=String(body.crop_category),image=({Vegetables:'tomatoes',Fruits:'avocados',Grains:'maize',Tubers:'potatoes',Legumes:'beans'} as Record<string,string>)[crop_category]||'tomatoes';
   data.listings.unshift({id,farmer_id:farm.id,title:String(body.title),crop_category,available_volume:Number(body.available_volume),sale_unit:String(body.sale_unit||guestLimitFor(String(body.title))?.unit||'kg'),price:Number(body.price),harvest_date:String(body.harvest_date),expiration_date:String(body.expiration_date),shelf_life_days:Number(body.shelf_life_days),preservative_used:body.preservative_used?1:0,description:String(body.description||''),image:`/images/${image}.jpg`,farm_name:farm.farm_name,location:farm.location,verification_status:farm.verification_status,traceability:String(body.traceability||'')});delete data.drafts[farm.id];return finish({id});
  }
- if(route.startsWith('/listings/')){const item=data.listings.find(l=>l.id===route.split('/')[2]&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified');if(!item)throw new Error('Sample listing not found.');return finish(publicListing(item));}
+ if(route.startsWith('/listings/')){
+  const reqId=route.split('/')[2];
+  const item=data.listings.find(l=>l.id===reqId&&data.farmers.find(f=>f.id===l.farmer_id)?.verification_status==='Verified');
+  if(!item&&reqId==='produce-1'){return finish({id:'produce-1',title:'Tomatoes',crop_category:'Vegetables',sale_unit:'kg',price:1250,price_minor:125000,currency:'MWK',image:'/images/tomatoes.jpg',farm_verified:true,harvest_inspected:true,harvest_date:day(),expiration_date:day(7),shelf_life_days:7,preservative_used:0,description:'Fresh field-ripened tomatoes grown in Lilongwe.',guest_limit:{name:'Tomatoes',max:2,unit:'kg'}});}
+  if(!item)throw new Error('Sample listing not found.');
+  return finish(publicListing(item));
+ }
  if(route==='/orders'){
   const u=account(method==='GET'?['Buyer','Farmer','Admin']:['Buyer']);if(method==='GET')return finish(data.orders.filter(o=>u.role==='Admin'||u.role==='Buyer'&&o.buyer_id===u.id||u.role==='Farmer'&&data.listings.find(l=>l.id===o.listing_id)?.farmer_id===u.farmer?.id));
   const item=data.listings.find(l=>l.id===body.listing_id);if(!item||item.available_volume==null||Number(body.volume)<=0||Number(body.volume)>item.available_volume)throw new Error('Enter a quantity within the available supply.');const id=crypto.randomUUID();
