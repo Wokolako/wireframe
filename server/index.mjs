@@ -33,7 +33,20 @@ if(!!clerkKey!==!!process.env.CLERK_SECRET_KEY)throw new Error('Configure both C
 const clerkHost=clerkEnabled?'https://'+Buffer.from(clerkKey.split('_').slice(2).join('_'),'base64').toString().replace(/\$$/,''):null;
 const authorizedParties=process.env.APP_ORIGIN?.split(',').map(s=>s.trim()).filter(Boolean)||[];
 if(!production)authorizedParties.push('http://localhost:3000','http://127.0.0.1:3000','http://localhost:3001','http://127.0.0.1:3001');
+const vercelHosts=[process.env.VERCEL_URL&&`https://${process.env.VERCEL_URL}`,process.env.VERCEL_PROJECT_PRODUCTION_URL&&`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`,process.env.NEXT_PUBLIC_VERCEL_URL&&`https://${process.env.NEXT_PUBLIC_VERCEL_URL}`,'https://wirefen.vercel.app'].filter(Boolean);
+for(const vHost of vercelHosts){if(!authorizedParties.includes(vHost))authorizedParties.push(vHost);}
 if(clerkEnabled&&production&&!authorizedParties.length)throw new Error('APP_ORIGIN is required with Clerk in production.');
+function getAuthorizedParties(req){
+ const parties=[...authorizedParties];
+ if(req){
+  const host=req.get('x-forwarded-host')||req.get('host');
+  const proto=req.get('x-forwarded-proto')||req.protocol||'https';
+  if(host){const derived=`${proto}://${host}`;if(!parties.includes(derived))parties.push(derived);}
+  const origin=req.get('origin');
+  if(origin&&!parties.includes(origin)){try{const u=new URL(origin);if(u.host===host||u.hostname.endsWith('.vercel.app'))parties.push(origin);}catch{}}
+ }
+ return parties;
+}
 const demo = !production && process.env.SEED_DEMO !== 'false';
 export const payChanguEnabled=()=>!!process.env.PAYCHANGU_SECRET_KEY&&(!demo||process.env.PAYCHANGU_TEST_MODE==='true');
 export async function convertToMWK(amount, fromCurrency='USD'){
@@ -53,7 +66,7 @@ app.disable('x-powered-by');
 if(process.env.TRUST_PROXY_HOPS){const hops=Number(process.env.TRUST_PROXY_HOPS);if(!Number.isInteger(hops)||hops<1||hops>5)throw new Error('TRUST_PROXY_HOPS must be an integer from 1 to 5.');app.set('trust proxy',hops);}
 app.use(helmet({ contentSecurityPolicy: { directives: { ...(clerkEnabled?{'script-src':["'self'",clerkHost,'https://challenges.cloudflare.com','https://*.protect.clerk.com'],'connect-src':["'self'",clerkHost,'https://*.protect.clerk.com:*','https://clerk-telemetry.com','https://*.clerk-telemetry.com'],'frame-src':["'self'",'https://challenges.cloudflare.com','https://*.protect.clerk.com'],'worker-src':["'self'",'blob:']}:{}), 'img-src': ["'self'",'data:','https://img.clerk.com'], 'upgrade-insecure-requests': production ? [] : null } }, crossOriginEmbedderPolicy:false }));
 app.use(express.json({limit:'10mb',verify:(req,res,buffer)=>{if(req.originalUrl.startsWith('/api/v1/paychangu/webhook'))req.rawBody=Buffer.from(buffer);}}), express.urlencoded({extended:false,limit:'10mb'}),cookieParser());
-if(clerkEnabled)app.use('/api',clerkMiddleware({publishableKey:clerkKey,secretKey:process.env.CLERK_SECRET_KEY,authorizedParties}));
+if(clerkEnabled)app.use('/api',clerkMiddleware((req)=>({publishableKey:clerkKey,secretKey:process.env.CLERK_SECRET_KEY,authorizedParties:getAuthorizedParties(req)})));
 const fail = (status,message) => Object.assign(new Error(message),{status});
 const hash = v => createHash('sha256').update(v).digest('hex');
 const now = () => new Date().toISOString();
@@ -62,7 +75,8 @@ app.use('/api',async(req,res,next)=>{
  res.set('Cache-Control','no-store');
  if(!['GET','HEAD','OPTIONS'].includes(req.method) && !req.path.startsWith('/v1/webhooks/')&&!req.path.startsWith('/v1/paychangu/webhook')){
    const origin=req.get('origin');
-   if(origin && !authorizedParties.includes(origin) && new URL(origin).host!==req.get('host')) return next(fail(403,'Request origin is not allowed.'));
+   const allowed=getAuthorizedParties(req);
+   if(origin && !allowed.includes(origin) && new URL(origin).host!==req.get('host')) return next(fail(403,'Request origin is not allowed.'));
  }
  try {if(clerkEnabled){const identity=getAuth(req);req.clerkUserId=identity.isAuthenticated?identity.userId:null;if(req.clerkUserId)req.user=await db.get('SELECT u.* FROM users u JOIN clerk_identities c ON c.user_id=u.id WHERE c.clerk_user_id=?',[req.clerkUserId]);return next();}const s=req.cookies.wirefen_session && await db.get('SELECT user_id FROM sessions WHERE token_hash=? AND expires_at>?',[hash(req.cookies.wirefen_session),now()]); if(s) req.user=await db.get('SELECT * FROM users WHERE id=?',[s.user_id]); next();} catch(e){next(e);}
 });
