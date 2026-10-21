@@ -4,7 +4,8 @@ import {useCallback,useEffect,useRef,useState,type FormEvent} from 'react';
 import {formatMoney,type CurrencyState} from './currency';
 import {ApprovedRequests} from './ApprovedRequests';
 import {ArrowLeft,ClipboardList,ArrowRight,ArrowUpRight,Bookmark,Building2,Camera,Check,CheckCircle2,CreditCard,Info,Leaf,Lock,MapPin,Minus,Package,Plus,Search,ShieldCheck,Smartphone,Trash2,X,LayoutGrid,Tractor,Sprout} from 'lucide-react';
-import {api,send,date,number as formatNumber,type Config,type Listing,type User} from './api';
+import {api,send,date,number as formatNumber,readLocal,writeLocal,type Config,type Listing,type User} from './api';
+export const marketplaceCacheKey='wirefen-cached-marketplace-v1';
 
 type Props={listing:Listing;money:(n:number,currency?:string)=>string;saved:boolean;toggleSave:()=>void;notify?:(s:string)=>void};
 type BasketLine={listing_id:string;quantity:number};
@@ -89,7 +90,8 @@ export function StorefrontMarketplace({savedOnly,saved,toggleSave,money,user,con
   }
   return 'all';
  });
- const [listings,setListings]=useState<Listing[]>([]),[search,setSearch]=useState(''),[category,setCategory]=useState('All produce'),[sort,setSort]=useState('recent'),[loading,setLoading]=useState(true),[error,setError]=useState(''),[page,setPage]=useState(1),[pages,setPages]=useState(1),[total,setTotal]=useState(0);
+ const cachedList=readLocal<Listing[]>(marketplaceCacheKey,[]);
+ const [listings,setListings]=useState<Listing[]>(()=>cachedList),[search,setSearch]=useState(''),[category,setCategory]=useState('All produce'),[sort,setSort]=useState('recent'),[loading,setLoading]=useState(()=>cachedList.length===0),[error,setError]=useState(''),[page,setPage]=useState(1),[pages,setPages]=useState(1),[total,setTotal]=useState(()=>cachedList.length);
 
  useEffect(()=>{
   const sync=()=>{
@@ -115,6 +117,9 @@ export function StorefrontMarketplace({savedOnly,saved,toggleSave,money,user,con
     setListings(items);
     setPages(Array.isArray(result)?1:result.pages);
     setTotal(Array.isArray(result)?items.length:result.total);
+    if(marketTab==='all'&&!search.trim()&&category==='All produce'&&page===1){
+      writeLocal(marketplaceCacheKey,items);
+    }
   }).catch(e=>{
     if(live)setError(e.message);
   }).finally(()=>{
@@ -152,13 +157,18 @@ export function StorefrontMarketplace({savedOnly,saved,toggleSave,money,user,con
 type DetailProps={id:string;user:User|null;money:(n:number,currency?:string)=>string;saved:string[];toggleSave:(id:string)=>void;signIn:()=>void;notify:(s:string)=>void};
 export function StorefrontDetail({id,user,money:formatMoney,saved,toggleSave,signIn,notify}:DetailProps){
  const navigatingToPayment=useRef(false);
- const [item,setItem]=useState<Listing|null>(null),[quantity,setQuantity]=useState('1'),[error,setError]=useState(''),[bulkOpen,setBulkOpen]=useState(false),[orderModalOpen,setOrderModalOpen]=useState(false);
- const [selectedImage,setSelectedImage]=useState<string>('');
+ const initialCached=readLocal<Listing[]>(marketplaceCacheKey,[]).find(l=>l.id===id)||null;
+ const [item,setItem]=useState<Listing|null>(()=>initialCached),[quantity,setQuantity]=useState('1'),[error,setError]=useState(''),[bulkOpen,setBulkOpen]=useState(false),[orderModalOpen,setOrderModalOpen]=useState(false);
+ const [selectedImage,setSelectedImage]=useState<string>(()=>(initialCached?.images&&initialCached.images[0])||initialCached?.image||'');
  useEffect(()=>{
-  setItem(null);
+  const cached=readLocal<Listing[]>(marketplaceCacheKey,[]).find(l=>l.id===id);
+  if(cached){
+   setItem(cached);
+   setSelectedImage(curr=>curr||(cached.images&&cached.images[0])||cached.image||'');
+  }
   api<Listing>('/listings/'+id).then(res=>{
    setItem(res);
-   setSelectedImage((res.images&&res.images[0])||res.image||'');
+   setSelectedImage(curr=>curr||(res.images&&res.images[0])||res.image||'');
   }).catch(e=>setError(e.message));
  },[id]);
  const limit=item?.guest_limit,canGuest=!!limit&&limit.unit===(item?.sale_unit||'kg'),over=!!(limit&&Number(quantity)>limit.max);
@@ -187,7 +197,7 @@ export function StorefrontDetail({id,user,money:formatMoney,saved,toggleSave,sig
 
 type CheckoutQuote={quote_token:string;currency:string;total_minor:number;payable_currency:string;payable_minor:number;quote_expires_at:string;items:Array<{listing_id:string;quantity:number;currency:string;unit_price_minor:number;line_total_minor:number}>};
 export function StorefrontBasket({user,money,signIn,notify,config,fx}:{user:User|null;money:(n:number,currency?:string)=>string;signIn:()=>void;notify:(s:string)=>void;config:Config;fx:CurrencyState}){
- const [items,setItems]=useState<BasketLine[]>(readBasket),[listings,setListings]=useState<Listing[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[done,setDone]=useState(()=>!!readActiveCheckout()),[bulk,setBulk]=useState<Listing|null>(null),[checkoutId,setCheckoutId]=useState<string|null>(readActiveCheckout);
+ const [items,setItems]=useState<BasketLine[]>(readBasket),[listings,setListings]=useState<Listing[]>(()=>readLocal<Listing[]>(marketplaceCacheKey,[])),[error,setError]=useState(''),[busy,setBusy]=useState(false),[done,setDone]=useState(()=>!!readActiveCheckout()),[bulk,setBulk]=useState<Listing|null>(null),[checkoutId,setCheckoutId]=useState<string|null>(readActiveCheckout);
  const [savedAddr,setSavedAddr]=useState<DeliveryAddress|null>(readSavedDelivery);
  const [editingDelivery,setEditingDelivery]=useState<boolean>(false);
  const [name,setName]=useState(savedAddr?.name||user?.name||'');

@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS listing_drafts (farmer_id TEXT PRIMARY KEY REFERENCES
 CREATE TABLE IF NOT EXISTS payments (id TEXT PRIMARY KEY, order_id TEXT NOT NULL REFERENCES order_requests(id), buyer_id TEXT NOT NULL REFERENCES users(id), amount REAL NOT NULL, currency TEXT NOT NULL, method TEXT NOT NULL, provider TEXT NOT NULL, account_or_phone TEXT NOT NULL, bank_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'completed', reference TEXT NOT NULL UNIQUE, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ussd_sessions (session_id TEXT PRIMARY KEY, phone_number TEXT NOT NULL, step TEXT NOT NULL DEFAULT 'welcome', data TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS listings_category_idx ON listings(crop_category,harvest_date);
+CREATE INDEX IF NOT EXISTS listings_status_avail_idx ON listings(status, available_volume, expiration_date);
+CREATE INDEX IF NOT EXISTS listings_farmer_idx ON listings(farmer_id);
+CREATE INDEX IF NOT EXISTS listings_created_idx ON listings(created_at DESC);
+CREATE INDEX IF NOT EXISTS farmer_verification_idx ON farmer_profiles(verification_status);
 CREATE INDEX IF NOT EXISTS orders_buyer_idx ON order_requests(buyer_id);
 CREATE INDEX IF NOT EXISTS payments_order_idx ON payments(order_id);
 CREATE INDEX IF NOT EXISTS payments_buyer_idx ON payments(buyer_id);

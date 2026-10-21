@@ -136,13 +136,17 @@ const storefrontListing=l=>({id:l.id,produce_id:l.produce_id,title:produceById(l
 const availabilityWhere=(alias='l')=>`${alias}.status='published' AND ${alias}.available_volume>0 AND ${alias}.expiration_date>=?`;
 const requireValidQuantity=(quantity,unit)=>quantityMillis(quantity,unit);
 app.get('/api/v1/guest-limits',async(req,res)=>{
+ res.set('Cache-Control','public, s-maxage=3600, stale-while-revalidate=86400');
  try{
   const rows=await db.all('SELECT produce_item AS name,max_quantity AS max,unit,category,shelf_life,shelf_life_days,requirement FROM guest_order_limits ORDER BY category,produce_item');
   if(rows&&rows.length>0) return res.json(rows.map(r=>({...r,max:Number(r.max)})));
  } catch{/* table may not exist — fall through to in-memory */}
  res.json(guestLimits);
 });
-app.get('/api/v1/catalogue',async(req,res)=>res.json(categories));
+app.get('/api/v1/catalogue',async(req,res)=>{
+ res.set('Cache-Control','public, s-maxage=3600, stale-while-revalidate=86400');
+ res.json(categories);
+});
 app.get('/api/v1/listings',async(req,res)=>{
  const q=z.object({category:z.enum(['Vegetables','Fruits','Grains','Tubers','Legumes','Beverages & Nuts']).optional(),produce_id:z.string().optional(),min_volume:z.coerce.number().nonnegative().optional(),max_volume:z.coerce.number().nonnegative().optional(),harvest_date_after:date.optional(),preservative:z.enum(['true','false']).optional(),search:z.string().max(100).optional(),mine:z.enum(['true']).optional(),page:z.coerce.number().int().positive().max(100000).default(1),page_size:z.coerce.number().int().positive().max(100).default(24)}).parse(req.query);
  if(q.min_volume!=null&&q.max_volume!=null&&q.min_volume>q.max_volume)throw fail(400,'Minimum volume must not exceed maximum volume.');
@@ -158,16 +162,19 @@ app.get('/api/v1/listings',async(req,res)=>{
   else where+=' AND 1=0';
  }
  if(q.search&&q.mine){where+=' AND LOWER(l.title) LIKE ?';params.push(`%${q.search.toLowerCase()}%`);}
- const count=await db.get('SELECT COUNT(*) AS count FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id'+where,params);
- const rows=await db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT ? OFFSET ?', [...params,q.page_size,(q.page-1)*q.page_size]);
+ const [count,rows]=await Promise.all([
+  db.get('SELECT COUNT(*) AS count FROM listings l JOIN farmer_profiles f ON f.id=l.farmer_id'+where,params),
+  db.all(joinListing+where+' ORDER BY l.created_at DESC,l.id LIMIT ? OFFSET ?', [...params,q.page_size,(q.page-1)*q.page_size])
+ ]);
  const data=rows.map(row=>{
   const base=storefrontListing(row);
   if(q.mine){return {...base,title:row.title||base.title,available_volume:Number(row.available_volume),description:row.description||base.description};}
   return base;
  });
+ if(!q.mine)res.set('Cache-Control','public, s-maxage=10, stale-while-revalidate=60');
  res.json({items:data,page:q.page,page_size:q.page_size,total:Number(count.count),pages:Math.ceil(Number(count.count)/q.page_size)});
 });
-app.get('/api/v1/listings/:id',async(req,res)=>{const row=await db.get(joinListing+` WHERE l.id=? AND ${availabilityWhere('l')}`,[req.params.id,now().slice(0,10)]);if(!row)throw fail(404,'Listing is expired or no longer available.');res.json(storefrontListing(row));});
+app.get('/api/v1/listings/:id',async(req,res)=>{const row=await db.get(joinListing+` WHERE l.id=? AND ${availabilityWhere('l')}`,[req.params.id,now().slice(0,10)]);if(!row)throw fail(404,'Listing is expired or no longer available.');res.set('Cache-Control','public, s-maxage=30, stale-while-revalidate=120');res.json(storefrontListing(row));});
 app.get('/api/v1/admin/listings',permit('Admin'),async(req,res)=>{
  const {country_code,region,locality}=z.object({country_code:z.string().max(2).optional(),region:z.string().max(100).optional(),locality:z.string().max(100).optional()}).parse(req.query);
  let where=' WHERE 1=1',params=[];
