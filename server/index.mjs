@@ -201,16 +201,24 @@ app.post('/api/v1/listings',permit('Farmer','Admin'),async(req,res)=>{
 });
 const checkoutLimit=rateLimit({windowMs:15*60*1000,limit:production?10:1000,standardHeaders:'draft-8',legacyHeaders:false});
 const paymentLimit=rateLimit({windowMs:60000,limit:production?20:1000,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many payment requests. Please try again shortly.'}});
+const defaultPayChanguOperators=[
+ {id:1,name:'TNM Mpamba',ref_id:'27494cb5-ba9e-437f-a114-4e7a7686bcca',short_code:'tnm',logo:null,supports_withdrawals:true,supported_country:{name:'Malawi',currency:'MWK'}},
+ {id:2,name:'Airtel Money',ref_id:'20be6c20-adeb-4b5b-a7ba-0769820df4fb',short_code:'airtel',logo:null,supports_withdrawals:true,supported_country:{name:'Malawi',currency:'MWK'}},
+ {id:5,name:'Changu MoMo',ref_id:'550c35a2-86aa-4590-9931-8f23e664cee9',short_code:'changu_wallet',logo:null,supports_withdrawals:true,supported_country:{name:'Malawi',currency:'MWK'}}
+];
 let payChanguOperatorsCache;
 async function payChanguOperators(){
  if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured.');
  if(payChanguOperatorsCache&&Date.now()-payChanguOperatorsCache.updatedAt<300000)return payChanguOperatorsCache.items;
- const response=await fetch('https://api.paychangu.com/mobile-money/',{headers:{Accept:'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},signal:AbortSignal.timeout(10000)});
- const body=await response.json().catch(()=>null);
- if(!response.ok||body?.status==='failed')throw fail(502,'PayChangu could not provide supported mobile-money operators.');
- const items=Array.isArray(body?.data)?body.data.filter(operator=>typeof operator?.ref_id==='string'&&operator.ref_id&&typeof operator?.name==='string'&&operator.name&&['MK','MWK'].includes(String(operator.supported_country?.currency||'').toUpperCase())):[];
- if(!items.length)throw fail(502,'PayChangu returned no supported Malawi mobile-money operators.');
- payChanguOperatorsCache={updatedAt:Date.now(),items};return items;
+ try{
+  const response=await fetch('https://api.paychangu.com/mobile-money/',{headers:{Accept:'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},signal:AbortSignal.timeout(4000)});
+  const body=await response.json().catch(()=>null);
+  if(response.ok&&body?.status!=='failed'){
+   const items=Array.isArray(body?.data)?body.data.filter(operator=>typeof operator?.ref_id==='string'&&operator.ref_id&&typeof operator?.name==='string'&&operator.name&&['MK','MWK'].includes(String(operator.supported_country?.currency||'').toUpperCase())):[];
+   if(items.length){payChanguOperatorsCache={updatedAt:Date.now(),items};return items;}
+  }
+ }catch{}
+ return defaultPayChanguOperators;
 }
 async function verifyPayChanguCharge(chargeId){
  if(!payChanguEnabled())throw fail(503,'PayChangu mobile-money checkout is not configured.');
@@ -374,7 +382,7 @@ app.post('/api/v1/paychangu/initialize',paymentLimit,async(req,res)=>{
  const [first_name='',...lastNames]=checkout.contact_name.trim().split(/\s+/),last_name=lastNames.join(' ');
  let response;
  try{
-  response=await fetch('https://api.paychangu.com/mobile-money/payments/initialize',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},body:JSON.stringify({mobile:input.mobile.slice(4),mobile_money_operator_ref_id:input.operator_ref_id,amount:String(mwkAmount),charge_id:checkout.provider_charge_id,email:checkout.contact_email,first_name,last_name}),signal:AbortSignal.timeout(15000)});
+  response=await fetch('https://api.paychangu.com/mobile-money/payments/initialize',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:`Bearer ${process.env.PAYCHANGU_SECRET_KEY}`},body:JSON.stringify({mobile:input.mobile.slice(4),mobile_money_operator_ref_id:input.operator_ref_id,amount:String(mwkAmount),charge_id:checkout.provider_charge_id,email:checkout.contact_email,first_name,last_name}),signal:AbortSignal.timeout(8000)});
  }catch(error){
   throw fail(502,'PayChangu could not be reached. The request may still be pending; check payment status before retrying.');
  }
